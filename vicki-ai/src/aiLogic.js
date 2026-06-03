@@ -283,8 +283,10 @@ function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMot
 
 // ─────────────────────────────────────────────
 // GENERATE CALL SUMMARY — runs after hangup
-// Uses gpt-4o-mini (cheap + fast) to extract:
-//   summary, language, preferredDoctor, preferredTime
+// Uses gpt-4o-mini (cheap + fast).
+//
+// STRICT RULE: only extract preferences the patient EXPLICITLY STATED.
+// Never infer from which slot was booked or which doctor was available.
 // ─────────────────────────────────────────────
 async function generateCallSummary(history, patient) {
   try {
@@ -300,14 +302,38 @@ async function generateCallSummary(history, patient) {
       .filter(Boolean)
       .join('\n');
 
+    const summaryPrompt = [
+      'You are analysing a dental clinic phone call transcript.',
+      '',
+      'Return ONLY valid JSON — no markdown, no explanation.',
+      '',
+      'STRICT RULES:',
+      '- "explicitDoctorPreference": ONLY set if patient used words like "I prefer", "I always go to", "I want Dr. X". NOT just because they booked with that doctor.',
+      '- "explicitTimePreference": ONLY set if patient said "I prefer mornings", "always in the afternoon", etc. NOT just because a morning slot was booked.',
+      '- "language": "en" or "pt" based on what language the patient spoke.',
+      '- "outcome": "booked" | "cancelled" | "info_given" | "transferred" | "no_action" | "abandoned"',
+      '- "summary": one factual sentence. Do NOT mention preferences unless the patient explicitly stated them.',
+      '- "flags": array of issues, e.g. ["no_slots_found","patient_confused","barge_in_heavy","language_switch","patient_declined_all_slots"] — empty array if none.',
+      '',
+      'JSON schema:',
+      '{',
+      '  "summary": "string",',
+      '  "language": "en" | "pt",',
+      '  "intent": "booking" | "appointments" | "info" | "emergency" | "general",',
+      '  "outcome": "booked" | "cancelled" | "info_given" | "transferred" | "no_action" | "abandoned",',
+      '  "explicitDoctorPreference": { "id": <number>, "name": "Dr. Name" } | null,',
+      '  "explicitTimePreference": "morning" | "afternoon" | null,',
+      '  "flags": []',
+      '}',
+    ].join('\n');
+
     const res = await openai.chat.completions.create({
       model:       'gpt-4o-mini',
       temperature: 0,
-      max_tokens:  200,
+      max_tokens:  250,
       messages: [
         {
           role:    'system',
-          content: `Summarise this dental clinic call in 1 sentence. Extract preferences.
 Reply ONLY with valid JSON — no markdown:
 {
   "summary": "One sentence describing what happened",

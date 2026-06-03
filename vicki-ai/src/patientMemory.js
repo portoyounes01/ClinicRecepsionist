@@ -1,16 +1,28 @@
 // ============================================================
-// VICKI AI — Patient Memory
+// VICKI AI — Patient Memory + Call Log
 //
-// Persists per-patient preferences and call history across calls.
-// Stored in /app/data/patient_memory.json (Railway Volume).
+// PHILOSOPHY:
+//   • Store ONLY facts the patient explicitly stated — never infer
+//   • Memory is for WARMTH only — never to pre-fill booking details
+//   • Every call gets logged for weekly human review and improvement
+//
+// Files (Railway Volume /app/data/):
+//   patient_memory.json  — per-patient verified facts
+//   call_log.jsonl       — append-only outcome log (1 line per call)
 // ============================================================
 
 const fs   = require('fs');
 const path = require('path');
 
-const MEMORY_FILE = path.join(__dirname, '../data/patient_memory.json');
+const DATA_DIR   = path.join(__dirname, '../data');
+const MEMORY_FILE = path.join(DATA_DIR, 'patient_memory.json');
+const LOG_FILE    = path.join(DATA_DIR, 'call_log.jsonl');
 
-// ─── Load / Save ──────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function ensureDir() {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
 function loadAll() {
   try {
     if (fs.existsSync(MEMORY_FILE)) return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
@@ -20,21 +32,42 @@ function loadAll() {
 
 function saveAll(data) {
   try {
-    fs.mkdirSync(path.dirname(MEMORY_FILE), { recursive: true });
+    ensureDir();
     fs.writeFileSync(MEMORY_FILE, JSON.stringify(data, null, 2));
   } catch (e) { console.error('[Memory] Write error:', e.message); }
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────────
+// ─── Patient Memory ───────────────────────────────────────────────────────────
 
-/** Load memory for one patient — returns null if first-time caller */
+/** Load memory for one patient — null if first-time caller */
 function getPatientMemory(patientId) {
   if (!patientId) return null;
   return loadAll()[String(patientId)] || null;
 }
 
-/** Save/update memory after a call ends */
-function updateAfterCall(patientId, { patientName, summary, intent, language, preferredDoctor, preferredTime }) {
+/**
+ * Save memory after a call ends.
+ *
+ * RULES — only update a preference field if the patient EXPLICITLY stated it.
+ * Pass null for fields that were not explicitly stated — they will NOT overwrite.
+ *
+ * @param {string|number} patientId
+ * @param {object} data
+ * @param {string}  data.patientName
+ * @param {string}  data.summary          - 1-sentence factual summary of the call
+ * @param {string}  data.intent           - booking | appointments | info | emergency | general
+ * @param {string|null} data.language     - 'en' | 'pt' — only if clearly established
+ * @param {object|null} data.explicitDoctorPreference  - { id, name } ONLY if patient said "I prefer..."
+ * @param {string|null} data.explicitTimePreference    - 'morning'|'afternoon' ONLY if patient said so
+ */
+function updateAfterCall(patientId, {
+  patientName,
+  summary,
+  intent,
+  language,
+  explicitDoctorPreference,
+  explicitTimePreference,
+}) {
   if (!patientId) return;
   const all      = loadAll();
   const existing = all[String(patientId)] || { callHistory: [], totalCalls: 0 };
@@ -45,7 +78,7 @@ function updateAfterCall(patientId, { patientName, summary, intent, language, pr
     intent:  intent  || 'general',
   };
 
-  const history = [record, ...(existing.callHistory || [])].slice(0, 10); // keep last 10 calls
+  const history = [record, ...(existing.callHistory || [])].slice(0, 10);
 
   const updated = {
     ...existing,
@@ -56,23 +89,29 @@ function updateAfterCall(patientId, { patientName, summary, intent, language, pr
     callHistory:     history,
   };
 
-  if (language)        updated.language        = language;
-  if (preferredDoctor) updated.preferredDoctor = preferredDoctor;  // { id, name }
-  if (preferredTime)   updated.preferredTime   = preferredTime;    // 'morning' | 'afternoon'
+  // Language: update only if clearly established this call
+  if (language) updated.language = language;
+
+  // Preferences: ONLY update if patient EXPLICITLY stated them this call
+  if (explicitDoctorPreference) updated.explicitDoctorPreference = explicitDoctorPreference;
+  if (explicitTimePreference)   updated.explicitTimePreference   = explicitTimePreference;
 
   all[String(patientId)] = updated;
   saveAll(all);
-  console.log(`[Memory] Saved for patient ${patientId} — "${summary?.slice(0, 80)}"`);
+  console.log(`[Memory] Saved patient ${patientId} — "${summary?.slice(0, 80)}"`);
 }
 
 /**
- * Format patient memory into a prompt-ready block for agent injection.
- * Returns null if no memory exists.
+ * Build a warmth-only memory block for agent prompts.
+ *
+ * ⚠️  This context is for making the patient feel REMEMBERED — not for
+ *     pre-filling booking details or skipping questions.
  */
 function buildMemoryContext(memory) {
   if (!memory) return null;
 
   const lines = [];
+  lines.push(`⚠️  USE THIS FOR WARMTH ONLY — never pre-fill or assume what the patient wants today. Always ask.`);
 
   if (memory.totalCalls > 0) {
     const daysSince = memory.lastCallDate
@@ -80,34 +119,66 @@ function buildMemoryContext(memory) {
       : null;
     const when = daysSince === 0 ? 'earlier today'
                : daysSince === 1 ? 'yesterday'
-               : daysSince != null ? `${daysSince} days ago` : 'before';
-    lines.push(`• This patient has called ${memory.totalCalls} time(s). Last call: ${when}.`);
+               : daysSince != null ? `${daysSince} days ago` : 'previously';
+    lines.push(`• Returning patient — ${memory.totalCalls} previous call(s). Last call: ${when}.`);
   }
 
   if (memory.language) {
-    const langLabel = memory.language === 'pt' ? 'European Portuguese (PT-PT)' : 'English';
-    lines.push(`• Known language: ${langLabel} — use this immediately, no need to detect.`);
-  }
-
-  if (memory.preferredDoctor) {
-    lines.push(`• Preferred doctor: ${memory.preferredDoctor.name} (ID: ${memory.preferredDoctor.id}) — proactively suggest this doctor first.`);
-  }
-
-  if (memory.preferredTime) {
-    lines.push(`• Preferred time of day: ${memory.preferredTime} — prioritise this when offering slots.`);
+    const label = memory.language === 'pt' ? 'European Portuguese (PT-PT)' : 'English';
+    lines.push(`• Established language: ${label}.`);
   }
 
   if (memory.lastCallSummary) {
-    lines.push(`• Last call summary: ${memory.lastCallSummary}`);
+    lines.push(`• Last call: ${memory.lastCallSummary}`);
   }
 
-  // Show up to 2 older calls
+  // Show explicitly stated preferences (patient said them — safe to mention)
+  if (memory.explicitDoctorPreference) {
+    lines.push(`• Patient explicitly said they prefer ${memory.explicitDoctorPreference.name} — you may mention this warmly as a question: "Would you like to go with ${memory.explicitDoctorPreference.name} again?"`);
+  }
+  if (memory.explicitTimePreference) {
+    lines.push(`• Patient explicitly said they prefer ${memory.explicitTimePreference} appointments — you may ask "Still prefer the ${memory.explicitTimePreference}?"`);
+  }
+
+  // Older call history (up to 2 more)
   const older = (memory.callHistory || []).slice(1, 3);
   older.forEach(c => {
     if (c.summary) lines.push(`• Earlier (${c.date}): ${c.summary}`);
   });
 
-  return lines.length ? lines.join('\n') : null;
+  return lines.join('\n');
 }
 
-module.exports = { getPatientMemory, updateAfterCall, buildMemoryContext };
+// ─── Call Outcome Log ─────────────────────────────────────────────────────────
+
+/**
+ * Append one call outcome to the JSONL log file.
+ * Used for weekly review — spot patterns, fix prompts.
+ *
+ * @param {object} entry
+ */
+function logCallOutcome(entry) {
+  try {
+    ensureDir();
+    const line = JSON.stringify({
+      ts:              new Date().toISOString(),
+      date:            new Date().toISOString().split('T')[0],
+      patientId:       entry.patientId    || null,
+      patientName:     entry.patientName  || 'Unknown',
+      callerNumber:    entry.callerNumber || null,
+      outcome:         entry.outcome,       // 'booked' | 'cancelled' | 'info' | 'transferred' | 'abandoned'
+      intent:          entry.intent        || 'general',
+      transferredToHuman: entry.transferredToHuman || false,
+      unclearTurns:    entry.unclearTurns  || 0,
+      durationSeconds: entry.durationSeconds || null,
+      summary:         entry.summary       || null,
+      flags:           entry.flags         || [],  // e.g. ['no_slots_found', 'barge_in_heavy']
+    }) + '\n';
+    fs.appendFileSync(LOG_FILE, line);
+    console.log(`[Log] Call outcome recorded: ${entry.outcome}`);
+  } catch (e) {
+    console.error('[Log] Write error:', e.message);
+  }
+}
+
+module.exports = { getPatientMemory, updateAfterCall, buildMemoryContext, logCallOutcome };

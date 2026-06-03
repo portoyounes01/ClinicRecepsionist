@@ -7,7 +7,7 @@ const { ElevenLabsClient }    = require('@elevenlabs/elevenlabs-js');
 const { processTurn, generateCallSummary } = require('./aiLogic');
 const cache         = require('./newsoftCache');
 const newsoft       = require('./newsoftApi');
-const { getPatientMemory, updateAfterCall } = require('./patientMemory');
+const { getPatientMemory, updateAfterCall, logCallOutcome } = require('./patientMemory');
 
 const deepgramClient = createClient(process.env.DEEPGRAM_API_KEY);
 const elevenlabs     = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
@@ -118,6 +118,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
   let processingTimer     = null; // debounce timer before sending to AI
   let pendingSlots        = [];   // slots from last check_slots — real slotBase64 values
   let pendingAppts        = [];   // appointments from last get_appointments — real appointmentId values
+  const callStartTime     = Date.now();  // for duration logging
 
   // ── Create Deepgram immediately — gives it time to open before first media ──
   // The SDK queues audio internally while connecting, so no readyState check needed.
@@ -295,20 +296,37 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
 
       if (result.action === 'hangup') {
         console.log('[Call] AI requested hangup — closing stream');
-        // Farewell already spoken. Save memory async (don’t block hangup),
-        // then close WS after a short delay for TTS to finish.
-        if (patient?.patientId) {
-          generateCallSummary(conversationHistory, patient)
-            .then(summary => updateAfterCall(patient.patientId, {
-              patientName:     patient.patientName,
-              summary:         summary.summary,
-              intent:          summary.intent,
-              language:        summary.language,
-              preferredDoctor: summary.preferredDoctor,
-              preferredTime:   summary.preferredTime,
-            }))
-            .catch(e => console.error('[Memory] Save error:', e.message));
-        }
+        // Farewell already spoken. Save memory + log call async (don’t block hangup).
+        const durationSeconds = Math.round((Date.now() - callStartTime) / 1000);
+        generateCallSummary(conversationHistory, patient)
+          .then(summary => {
+            // 1. Update patient memory (only explicitly stated preferences)
+            if (patient?.patientId) {
+              updateAfterCall(patient.patientId, {
+                patientName:              patient.patientName,
+                summary:                  summary.summary,
+                intent:                   summary.intent,
+                language:                 summary.language,
+                explicitDoctorPreference: summary.explicitDoctorPreference,
+                explicitTimePreference:   summary.explicitTimePreference,
+              });
+            }
+            // 2. Log call outcome for weekly review
+            logCallOutcome({
+              patientId:          patient?.patientId  || null,
+              patientName:        patient?.patientName || 'Unknown',
+              callerNumber,
+              outcome:            summary.outcome,
+              intent:             summary.intent,
+              transferredToHuman: currentAgent === 'human',
+              unclearTurns,
+              durationSeconds,
+              summary:            summary.summary,
+              flags:              summary.flags || [],
+            });
+          })
+          .catch(e => console.error('[Memory] Save error:', e.message));
+
         setTimeout(() => {
           if (callSid) hangupCalls.add(callSid);
           try { ws.close(); } catch (_) {}
