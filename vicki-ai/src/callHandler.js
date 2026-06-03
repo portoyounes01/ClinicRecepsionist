@@ -183,15 +183,15 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   console.log('[STT] Keyword boost active:', allKeywords.slice(0, 6).join(', '), '...');
 
   const deepgramLive = deepgramClient.listen.live({
-    model:            'nova-2',
-    language:         'multi',        // EN + PT auto-detection
-    smart_format:     true,
-    interim_results:  true,
-    endpointing:      300,            // ⚡ was 800ms — cuts response delay by ~500ms
-    utterance_end_ms: 500,            // ⚡ was 1000ms
-    encoding:         'linear16',
-    sample_rate:      8000,
-    filler_words:     false,
+    model:           'nova-2',
+    language:        'pt',           // Primary language Portuguese
+    detect_language: true,           // Auto-detect EN vs PT per utterance
+    smart_format:    true,
+    interim_results: true,
+    endpointing:     300,
+    encoding:        'linear16',
+    sample_rate:     8000,
+    filler_words:    false,
   });
 
   deepgramLive.on(LiveTranscriptionEvents.Open, () => {
