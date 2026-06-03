@@ -242,10 +242,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     const wordCount = transcript.split(/\s+/).filter(Boolean).length;
     console.log(`[STT] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}"${confidence < 0.75 && isFinal ? ` (conf:${confidence.toFixed(2)})` : ''}`);
 
-    // ⚡ Barge-in: ANY word while Vicki speaks → stop her immediately
-    // (was 3 words — now 1 word so "yes"/"no"/"wait" interrupts instantly)
-    if (isSpeaking && currentAbort && wordCount >= 1) {
-      console.log('[Barge-in] Patient spoke — stopping Vicki');
+    // Barge-in: patient says 2+ words while Vicki speaks → stop her
+    // 2 words avoids false triggers from noise/echo, still catches "no", "wait", "stop"
+    if (isSpeaking && currentAbort && wordCount >= 2) {
+      console.log('[Barge-in] Patient interrupted — stopping Vicki');
       clearTimeout(processingTimer); processingTimer = null;
       currentAbort(); currentAbort = null; isSpeaking = false;
       pendingTranscript = '';
@@ -442,16 +442,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           // ──────────────────────────────────────────────────────────────────
           (async () => {
             try {
-              const ringDelay   = new Promise(r => setTimeout(r, 2000));
-              const lookupAll   = Promise.all([
+              // Lookup patient + doctors in parallel, greet as soon as data is ready
+              // No artificial delay — answer immediately
+              const [patientResult, doctors, motives] = await Promise.all([
                 callerNumber ? newsoft.getPatientByPhone(callerNumber) : Promise.resolve(null),
                 newsoft.getDoctors(),
                 newsoft.getMotives(),
-              ]);
-
-              const [[patientResult, doctors, motives]] = await Promise.all([
-                lookupAll,
-                ringDelay,
               ]);
 
               patient = patientResult; cachedDoctors = doctors; cachedMotives = motives;
@@ -498,34 +494,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         case 'media':
           if (msg.media?.payload && deepgramOpen) {
             const linear = pcmaToLinear16(Buffer.from(msg.media.payload, 'base64'));
-
-            // ⚡ Audio-level barge-in — stops Vicki the INSTANT patient's voice is detected
-            // Runs at audio packet level (~20ms) — faster than waiting for Deepgram transcript
-            if (isSpeaking && currentAbort) {
-              // Compute RMS amplitude of this audio chunk
-              let sumSq = 0;
-              for (let i = 0; i < linear.length - 1; i += 2) {
-                const s = linear.readInt16LE(i);
-                sumSq += s * s;
-              }
-              const rms = Math.sqrt(sumSq / (linear.length / 2));
-              if (rms > 800) {            // 800 = speech threshold (tune if needed)
-                loudPackets++;
-              } else {
-                loudPackets = 0;          // reset on silence
-              }
-              // 2 consecutive loud packets (~40ms) = real speech, not a click
-              if (loudPackets >= 2) {
-                console.log(`[Barge-in] Audio RMS ${Math.round(rms)} — instant stop`);
-                clearTimeout(processingTimer); processingTimer = null;
-                currentAbort(); currentAbort = null; isSpeaking = false;
-                pendingTranscript = '';
-                loudPackets = 0;
-              }
-            } else {
-              loudPackets = 0;
-            }
-
+            // NOTE: audio-level barge-in removed — phone echo triggers false positives.
+            // Word-count barge-in (2+ words) handles interrupts reliably instead.
             deepgramLive.send(linear);
           }
           break;
