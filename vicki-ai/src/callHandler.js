@@ -118,6 +118,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let processingTimer     = null;
   let pendingSlots        = [];
   let pendingAppts        = [];
+  let lastOfferedDate     = null;   // date of last slot shown — next search skips past it
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
   let callEnding          = false;      // prevents double-hangup
@@ -288,9 +289,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       };
 
       const result = await processTurn({
-        history:      conversationHistory,
+        history:        conversationHistory,
         patient,
-        clinicInfo:   CLINIC_INFO,
+        clinicInfo:     CLINIC_INFO,
         userText,
         cachedDoctors,
         cachedMotives,
@@ -300,13 +301,15 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         pendingSlots,
         pendingAppts,
         patientMemory,
+        lastOfferedDate,
       });
 
       conversationHistory = result.history;
-      if (result.currentAgent  !== undefined) currentAgent  = result.currentAgent;
-      if (result.unclearTurns  !== undefined) unclearTurns  = result.unclearTurns;
-      if (result.pendingSlots  && result.pendingSlots.length)  pendingSlots  = result.pendingSlots;
-      if (result.pendingAppts  && result.pendingAppts.length)  pendingAppts  = result.pendingAppts;
+      if (result.currentAgent   !== undefined) currentAgent   = result.currentAgent;
+      if (result.unclearTurns   !== undefined) unclearTurns   = result.unclearTurns;
+      if (result.pendingSlots   && result.pendingSlots.length)  pendingSlots  = result.pendingSlots;
+      if (result.pendingAppts   && result.pendingAppts.length)  pendingAppts  = result.pendingAppts;
+      if (result.lastOfferedDate !== undefined) lastOfferedDate = result.lastOfferedDate;
 
       // ── Speak the response ───────────────────────────────────────────
       if (result.actionFired && result.speak) {

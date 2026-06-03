@@ -174,17 +174,21 @@ async function executeAction(action, params, patient) {
 
     case 'check_slots': {
       const today    = new Date().toISOString().split('T')[0];
-      const maxDate  = new Date(Date.now() + 28 * 86400000).toISOString().split('T')[0]; // 28 days — Newsoft API caps at 30
-      // Sanitize motiveId — guard against string "undefined" or "null"
+      const maxDate  = new Date(Date.now() + 28 * 86400000).toISOString().split('T')[0];
       const rawMotive = params.motiveId;
       const motiveId  = rawMotive && rawMotive !== 'undefined' && rawMotive !== 'null'
         ? rawMotive : null;
       const medicId   = params.medicId && params.medicId !== 'undefined' && params.medicId !== 'null'
         ? params.medicId : null;
+
+      // If patient declined a slot, start searching from the day AFTER that date
+      const dateFrom = params._lastOfferedDate
+        ? new Date(new Date(params._lastOfferedDate + 'T00:00:00').getTime() + 86400000).toISOString().split('T')[0]
+        : today;
       const raw = await newsoft.getAvailableSlots({
         medicId,
         motiveId,
-        dateFrom: today,
+        dateFrom,
         dateTo:   maxDate,
       });
       if (!raw.length) return { slots: [] };
@@ -250,7 +254,10 @@ async function executeAction(action, params, patient) {
       }
 
       const slots = [pickedMorning, pickedAfternoon].filter(Boolean).map(toSlot);
-      return { slots: slots.length ? slots : [toSlot(raw[0])] };
+      const lastOfferedDate = slots.length > 0
+        ? slots.reduce((max, s) => s.date > max ? s.date : max, slots[0].date)
+        : null;
+      return { slots: slots.length ? slots : [toSlot(raw[0])], lastOfferedDate };
     }
 
     case 'get_appointments': {
@@ -410,7 +417,8 @@ async function processTurn({
   onSpeakReady   = null,
   pendingSlots   = [],
   pendingAppts   = [],
-  patientMemory  = null,   // loaded once at call start — used to personalise all agents
+  patientMemory  = null,
+  lastOfferedDate = null,   // date of last slot offered — skip past it on next search
 }) {
   history.push({ role: 'user', content: userText });
 
@@ -534,7 +542,9 @@ async function processTurn({
         ? { ...params, _pendingSlots: pendingSlots }
         : action === 'cancel_appointment'
           ? { ...params, _pendingAppts: pendingAppts }
-          : params;
+          : action === 'check_slots'
+            ? { ...params, _lastOfferedDate: lastOfferedDate }
+            : params;
       const actionResult = await executeAction(action, enrichedParams, patient);
       if (actionResult) {
         const formatted = formatActionResponse(action, actionResult);
@@ -557,6 +567,7 @@ async function processTurn({
             currentAgent:    nextAgent,
             pendingSlots:    formatted.pendingSlots,
             pendingAppts:    formatted.pendingAppointments,
+            lastOfferedDate: actionResult.lastOfferedDate ?? lastOfferedDate,
           };
         }
       }
