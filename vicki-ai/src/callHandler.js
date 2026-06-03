@@ -121,6 +121,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
   let callEnding          = false;      // prevents double-hangup
+  let loudPackets         = 0;          // consecutive loud audio packets (for audio barge-in)
 
   // ── Watchdog 1: Max call duration (15 min) ────────────────────────────────
   // If a call is still open after 15 min something went wrong — auto-hangup.
@@ -182,15 +183,14 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   console.log('[STT] Keyword boost active:', allKeywords.slice(0, 6).join(', '), '...');
 
   const deepgramLive = deepgramClient.listen.live({
-    model:            'nova-2',       // nova-2 has confirmed multilingual support
+    model:            'nova-2',
     language:         'multi',        // EN + PT auto-detection
     smart_format:     true,
     interim_results:  true,
-    endpointing:      800,
-    utterance_end_ms: 1000,
+    endpointing:      300,            // ⚡ was 800ms — cuts response delay by ~500ms
+    utterance_end_ms: 500,            // ⚡ was 1000ms
     encoding:         'linear16',
     sample_rate:      8000,
-    // keywords removed — not compatible with language:multi in nova-2
     filler_words:     false,
   });
 
@@ -242,9 +242,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     const wordCount = transcript.split(/\s+/).filter(Boolean).length;
     console.log(`[STT] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}"${confidence < 0.75 && isFinal ? ` (conf:${confidence.toFixed(2)})` : ''}`);
 
-    // Barge-in: 3+ words while Vicki speaks
-    if (isSpeaking && currentAbort && wordCount >= 3) {
-      console.log('[Barge-in] Stopping Vicki');
+    // ⚡ Barge-in: ANY word while Vicki speaks → stop her immediately
+    // (was 3 words — now 1 word so "yes"/"no"/"wait" interrupts instantly)
+    if (isSpeaking && currentAbort && wordCount >= 1) {
+      console.log('[Barge-in] Patient spoke — stopping Vicki');
       clearTimeout(processingTimer); processingTimer = null;
       currentAbort(); currentAbort = null; isSpeaking = false;
       pendingTranscript = '';
@@ -258,8 +259,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     // Accumulate this FINAL into the pending buffer
     pendingTranscript += (pendingTranscript ? ' ' : '') + transcript;
 
-    // Debounce: wait 400ms for more speech before sending to AI.
-    // This merges split utterances like "No. It's for" + "cleaning."
+    // ⚡ Debounce: wait 150ms (was 400ms) — still merges fast split utterances
     clearTimeout(processingTimer);
     processingTimer = setTimeout(async () => {
       const userText = pendingTranscript.trim();
@@ -496,10 +496,37 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           break;
 
         case 'media':
-          // Send audio to Deepgram always — SDK queues if not yet open.
-          // Continuous audio prevents the 1006 idle-timeout closure.
           if (msg.media?.payload && deepgramOpen) {
-            deepgramLive.send(pcmaToLinear16(Buffer.from(msg.media.payload, 'base64')));
+            const linear = pcmaToLinear16(Buffer.from(msg.media.payload, 'base64'));
+
+            // ⚡ Audio-level barge-in — stops Vicki the INSTANT patient's voice is detected
+            // Runs at audio packet level (~20ms) — faster than waiting for Deepgram transcript
+            if (isSpeaking && currentAbort) {
+              // Compute RMS amplitude of this audio chunk
+              let sumSq = 0;
+              for (let i = 0; i < linear.length - 1; i += 2) {
+                const s = linear.readInt16LE(i);
+                sumSq += s * s;
+              }
+              const rms = Math.sqrt(sumSq / (linear.length / 2));
+              if (rms > 800) {            // 800 = speech threshold (tune if needed)
+                loudPackets++;
+              } else {
+                loudPackets = 0;          // reset on silence
+              }
+              // 2 consecutive loud packets (~40ms) = real speech, not a click
+              if (loudPackets >= 2) {
+                console.log(`[Barge-in] Audio RMS ${Math.round(rms)} — instant stop`);
+                clearTimeout(processingTimer); processingTimer = null;
+                currentAbort(); currentAbort = null; isSpeaking = false;
+                pendingTranscript = '';
+                loudPackets = 0;
+              }
+            } else {
+              loudPackets = 0;
+            }
+
+            deepgramLive.send(linear);
           }
           break;
 
