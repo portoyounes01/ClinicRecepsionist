@@ -1,0 +1,4 @@
+node_modules/
+.env
+*.log
+stress_results.txt
