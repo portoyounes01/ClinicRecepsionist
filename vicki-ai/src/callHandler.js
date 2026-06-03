@@ -381,10 +381,27 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           })
           .catch(e => console.error('[Memory] Save error:', e.message));
 
-        setTimeout(() => {
-          if (callSid) hangupCalls.add(callSid);
-          try { ws.close(); } catch (_) {}
-        }, 1500);
+        // Wait for Vicki to finish speaking, then close.
+        // Polls every 200ms — max 6s wait — then hangs up.
+        let waited = 0;
+        const doHangup = () => {
+          if (isSpeaking && waited < 6000) {
+            waited += 200;
+            setTimeout(doHangup, 200);
+            return;
+          }
+          // Small buffer so last TTS audio finishes playing on the patient's end
+          setTimeout(() => {
+            if (callSid) {
+              hangupCalls.add(callSid);
+              console.log(`[Call] Added ${callSid} to hangupCalls — will end on next keep-alive`);
+            } else {
+              console.warn('[Call] callSid is null — cannot signal Telnyx hangup via keep-alive');
+            }
+            try { ws.close(); } catch (_) {}
+          }, 600);
+        };
+        doHangup();
       }
 
     } catch (err) {
@@ -407,9 +424,15 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           break;
 
         case 'start':
-          callSid      = msg.start?.callSid || null;
+          // Try all known Telnyx field names for the call ID
+          callSid = msg.start?.callSid
+                 || msg.start?.call_sid
+                 || msg.start?.CallSid
+                 || msg.streamSid
+                 || null;
           callerNumber = msg.start?.customParameters?.callerNumber || msg.start?.from || null;
           console.log(`[Call] Started. Caller: ${callerNumber} | SID: ${callSid}`);
+          console.log(`[Call] start payload keys: ${Object.keys(msg.start || {}).join(', ')}`);
 
           // ── Look up patient name BEFORE speaking ─────────────────────────────────
           // Race: lookup vs 2-second ring delay.
