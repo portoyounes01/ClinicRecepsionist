@@ -131,7 +131,9 @@ wss.on('connection', (ws, req) => {
   handleCallStream(ws, req, hangupCalls);
 });
 
-const { warmUp } = require('./newsoftCache');
+const { warmUp }         = require('./newsoftCache');
+const { start: startBot } = require('./telegramBot');
+const { scheduleNightly } = require('./improvementAgent');
 
 server.listen(PORT, async () => {
   console.log(`
@@ -143,7 +145,12 @@ server.listen(PORT, async () => {
 ║  WebSocket: wss://YOUR-URL/media      ║
 ╚═══════════════════════════════════════╝
   `);
-  // Pre-load token + doctors + motives from cache (or Newsoft if stale)
-  // This ensures zero delay when the first call comes in
+  // Pre-load token + doctors + motives from cache
   await warmUp();
+
+  // Start Telegram manager bot
+  startBot();
+
+  // Schedule nightly improvement agent (runs at 2am)
+  scheduleNightly();
 });
