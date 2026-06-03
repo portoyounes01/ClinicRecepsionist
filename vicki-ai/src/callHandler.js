@@ -141,15 +141,15 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
   console.log('[STT] Keyword boost active:', allKeywords.slice(0, 6).join(', '), '...');
 
   const deepgramLive = deepgramClient.listen.live({
-    model:            'nova-3',
-    language:         'multi',        // multilingual — detects EN + PT automatically
+    model:            'nova-2',       // nova-2 has confirmed multilingual support
+    language:         'multi',        // EN + PT auto-detection
     smart_format:     true,
     interim_results:  true,
     endpointing:      800,
     utterance_end_ms: 1000,
     encoding:         'linear16',
     sample_rate:      8000,
-    keywords:         allKeywords,
+    // keywords removed — not compatible with language:multi in nova-2
     filler_words:     false,
   });
 
