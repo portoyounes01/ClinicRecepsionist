@@ -29,11 +29,9 @@ function buildPrompt(patient, clinicInfo, cachedDoctors, cachedMotives, memoryCo
 TODAY: ${today}
 ${patientCtx}${memoryBlock}
 
-LANGUAGE — CRITICAL:
-- Read the conversation history to detect the patient's language.
-- If they're speaking Portuguese → respond ENTIRELY in European Portuguese (PT-PT). Not Brazilian.
-- If they're speaking English → respond in English.
-- Stay consistent. Never mix languages in one response.
+LANGUAGE:
+- Always respond in English only. Do not switch to Portuguese or any other language.
+
 - PT-PT key phrases: "um momento", "vou verificar", "tem disponibilidade", "gostaria de marcar",
   "de manhã", "de tarde", "confirmão", "marcado", "doutor/a", "consulta", "motivo da consulta".
 - PT-PT slot presentation: "Tenho [dia] — às [hora] com [médico], ou às [hora] com [médico]. Qual prefere?"

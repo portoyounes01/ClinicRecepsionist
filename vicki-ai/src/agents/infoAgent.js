@@ -15,10 +15,9 @@ function buildPrompt(patient, clinicInfo, memoryContext) {
 
 ${patientCtx}${memoryBlock}
 
-LANGUAGE — CRITICAL:
-- Read the conversation history to detect the patient's language.
-- If they're speaking Portuguese → respond ENTIRELY in European Portuguese (PT-PT). Not Brazilian.
-- If they're speaking English → respond in English. Stay consistent throughout.
+LANGUAGE:
+- Always respond in English only. Do not switch to Portuguese or any other language.
+
 - PT-PT: use "está aberto", "está fechado", "os nossos serviços incluem", "a nossa equipa",
   "pode ligar para", "fica em", "aceitamos", "não dispomos de informação sobre preços por telefone".
 

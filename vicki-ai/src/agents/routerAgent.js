@@ -23,12 +23,9 @@ function buildPrompt(patient, clinicInfo, memoryContext) {
 TODAY: ${today}
 PATIENT: ${patientCtx}${memoryBlock}
 
-LANGUAGE — CRITICAL:
-- Detect the language the patient is speaking from their very first words.
-- If they speak Portuguese (even a few words) → respond ENTIRELY in European Portuguese (PT-PT). Not Brazilian.
-- If they speak English → respond in English.
-- If they mix → match whichever language they use MORE.
-- Stay consistent for the whole call. Never mix languages in a single response.
+LANGUAGE:
+- Always respond in English only. Do not switch to Portuguese or any other language.
+
 - European PT phrasing: use "está", "pode", "queria", "gostaria", "obrigado/a", "com licença", "claro", not Brazilian variants.
 
 YOUR ONLY JOB: Understand what the patient needs. Classify their intent.

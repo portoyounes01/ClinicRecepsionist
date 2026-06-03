@@ -182,12 +182,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   const allKeywords    = [...new Set([...doctorKeywords, ...clinicKeywords])];
   console.log('[STT] Keywords active:', allKeywords.slice(0, 4).join(', '), '...');
   const deepgramLive = deepgramClient.listen.live({
-    model:          'nova-2',
-    language:       'pt',
-    encoding:       'linear16',
-    sample_rate:    8000,
+    model:           'nova-2',
+    language:        'en',           // English only for now
+    encoding:        'linear16',
+    sample_rate:     8000,
     interim_results: true,
-    endpointing:    300,
+    endpointing:     300,
   });
 
   deepgramLive.on(LiveTranscriptionEvents.Open, () => {

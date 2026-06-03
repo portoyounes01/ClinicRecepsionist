@@ -21,10 +21,9 @@ function buildPrompt(patient, clinicInfo, memoryContext) {
 TODAY: ${today}
 ${patientCtx}${memoryBlock}
 
-LANGUAGE — CRITICAL:
-- Read the conversation history to detect the patient's language.
-- If they're speaking Portuguese → respond ENTIRELY in European Portuguese (PT-PT). Not Brazilian.
-- If they're speaking English → respond in English. Stay consistent throughout.
+LANGUAGE:
+- Always respond in English only. Do not switch to Portuguese or any other language.
+
 - PT-PT key phrases: "a sua consulta é", "quer cancelar", "quer remarcar", "confirmado",
   "cancelada", "quer que marque uma nova consulta?", "de manhã", "de tarde".
 
