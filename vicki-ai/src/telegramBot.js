@@ -166,7 +166,11 @@ async function handleFreeText(msg) {
       ],
     });
 
-    const parsed = JSON.parse(res.choices[0].message.content.trim());
+    const raw    = res.choices[0].message.content.trim()
+                      .replace(/^```json\s*/i, '')
+                      .replace(/^```\s*/i, '')
+                      .replace(/\s*```$/i, '');
+    const parsed = JSON.parse(raw);
 
     switch (parsed.action) {
       case 'approve_all': {
