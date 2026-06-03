@@ -3,10 +3,11 @@
 // ============================================================
 
 const { createClient, LiveTranscriptionEvents } = require('@deepgram/sdk');
-const { ElevenLabsClient } = require('@elevenlabs/elevenlabs-js');
-const { processTurn } = require('./aiLogic');
-const cache          = require('./newsoftCache');
-const newsoft = require('./newsoftApi');
+const { ElevenLabsClient }    = require('@elevenlabs/elevenlabs-js');
+const { processTurn, generateCallSummary } = require('./aiLogic');
+const cache         = require('./newsoftCache');
+const newsoft       = require('./newsoftApi');
+const { getPatientMemory, updateAfterCall } = require('./patientMemory');
 
 const deepgramClient = createClient(process.env.DEEPGRAM_API_KEY);
 const elevenlabs     = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
@@ -104,6 +105,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
   let callerNumber        = null;
   let callSid             = null;   // Telnyx CallSid — used to trigger hangup
   let patient             = null;
+  let patientMemory       = null;   // loaded once at call start
   let cachedDoctors       = [];
   let cachedMotives       = [];
   let conversationHistory = [];
@@ -256,6 +258,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
         onSpeakReady,
         pendingSlots,
         pendingAppts,
+        patientMemory,
       });
 
       conversationHistory = result.history;
@@ -292,8 +295,20 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
 
       if (result.action === 'hangup') {
         console.log('[Call] AI requested hangup — closing stream');
-        // Farewell was already spoken via onSpeakReady / speakNow above.
-        // Wait a moment for TTS to finish, then close WS and flag keep-alive.
+        // Farewell already spoken. Save memory async (don’t block hangup),
+        // then close WS after a short delay for TTS to finish.
+        if (patient?.patientId) {
+          generateCallSummary(conversationHistory, patient)
+            .then(summary => updateAfterCall(patient.patientId, {
+              patientName:     patient.patientName,
+              summary:         summary.summary,
+              intent:          summary.intent,
+              language:        summary.language,
+              preferredDoctor: summary.preferredDoctor,
+              preferredTime:   summary.preferredTime,
+            }))
+            .catch(e => console.error('[Memory] Save error:', e.message));
+        }
         setTimeout(() => {
           if (callSid) hangupCalls.add(callSid);
           try { ws.close(); } catch (_) {}
@@ -339,7 +354,6 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
                 newsoft.getMotives(),
               ]);
 
-              // Wait for BOTH the ring delay AND the lookup to finish
               const [[patientResult, doctors, motives]] = await Promise.all([
                 lookupAll,
                 ringDelay,
@@ -347,15 +361,30 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
 
               patient = patientResult; cachedDoctors = doctors; cachedMotives = motives;
 
+              // Load patient memory (null if first-time caller)
+              if (patient?.patientId) {
+                patientMemory = getPatientMemory(patient.patientId);
+                if (patientMemory) {
+                  console.log(`[Memory] Loaded for patient ${patient.patientId} — ${patientMemory.totalCalls} previous call(s)`);
+                }
+              }
+
               console.log(patient
                 ? `[Newsoft] Patient: ${patient.patientName} (ID: ${patient.patientId})`
                 : '[Newsoft] Unknown caller');
               console.log(`[Newsoft] ${cachedDoctors.length} doctors, ${cachedMotives.length} motives`);
 
               const firstName = patient?.patientName?.split(' ')[0];
-              const greeting  = firstName
-                ? `Hi ${firstName}! I'm Vicki, Instituto Vilas Boas's virtual assistant. How can I help you today?`
-                : `Hello! I'm Vicki, Instituto Vilas Boas's virtual assistant. How can I help you today?`;
+              let greeting;
+              if (firstName && patientMemory?.totalCalls > 0) {
+                // Returning patient — skip intro, go warm and personal
+                greeting = `Hi ${firstName}! Great to hear from you again — how can I help today?`;
+              } else if (firstName) {
+                // First time or unknown memory
+                greeting = `Hi ${firstName}! I'm Vicki, Instituto Vilas Boas's virtual assistant. How can I help you today?`;
+              } else {
+                greeting = `Hello! I'm Vicki, Instituto Vilas Boas's virtual assistant. How can I help you today?`;
+              }
 
               isSpeaking = true;
               speak(greeting, ws, () => { isSpeaking = false; }, (fn) => { currentAbort = fn; });

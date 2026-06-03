@@ -4,13 +4,16 @@
 // Prices ALWAYS → transfer to human team.
 // ============================================================
 
-function buildPrompt(patient, clinicInfo) {
-  const firstName = patient?.patientName?.split(' ')[0] || null;
+function buildPrompt(patient, clinicInfo, memoryContext) {
+  const firstName  = patient?.patientName?.split(' ')[0] || null;
   const patientCtx = firstName ? `Caller is ${firstName}.` : `Unknown caller.`;
+  const memoryBlock = memoryContext
+    ? `\nPATIENT HISTORY:\n${memoryContext}\n`
+    : '';
 
   return `You are Vicki, information specialist at Instituto Vilas Boas dental clinic, Loulé. Warm, knowledgeable, human — use contractions.
 
-${patientCtx}
+${patientCtx}${memoryBlock}
 
 LANGUAGE — CRITICAL:
 - Read the conversation history to detect the patient's language.

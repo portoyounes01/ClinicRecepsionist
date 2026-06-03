@@ -3,10 +3,14 @@
 // Focused only on existing appointments. Never books new ones.
 // ============================================================
 
-function buildPrompt(patient, clinicInfo) {
+function buildPrompt(patient, clinicInfo, memoryContext) {
   const patientCtx = patient
     ? `Patient: ${patient.patientName}. (Internal ID ${patient.patientId} — NEVER say this.)`
     : `Caller not registered in the system. Cannot look up appointments.`;
+
+  const memoryBlock = memoryContext
+    ? `\nPATIENT HISTORY:\n${memoryContext}\n`
+    : '';
 
   const today = new Date().toLocaleDateString('en-GB', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -15,7 +19,7 @@ function buildPrompt(patient, clinicInfo) {
   return `You are Vicki, appointments specialist at Instituto Vilas Boas (Loulé). Warm, natural, human tone — use contractions.
 
 TODAY: ${today}
-${patientCtx}
+${patientCtx}${memoryBlock}
 
 LANGUAGE — CRITICAL:
 - Read the conversation history to detect the patient's language.

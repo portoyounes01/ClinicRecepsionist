@@ -11,12 +11,13 @@
 
 const OpenAI = require('openai').default;
 const newsoft = require('./newsoftApi');
+const { buildMemoryContext } = require('./patientMemory');
 
-const routerAgent      = require('./agents/routerAgent');
-const bookingAgent     = require('./agents/bookingAgent');
+const routerAgent       = require('./agents/routerAgent');
+const bookingAgent      = require('./agents/bookingAgent');
 const appointmentsAgent = require('./agents/appointmentsAgent');
-const infoAgent        = require('./agents/infoAgent');
-const emergencyAgent   = require('./agents/emergencyAgent');
+const infoAgent         = require('./agents/infoAgent');
+const emergencyAgent    = require('./agents/emergencyAgent');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const { LOULE_DOCTOR_IDS } = bookingAgent;
@@ -266,17 +267,65 @@ async function executeAction(action, params, patient) {
 // AGENT PROMPT SELECTOR
 // Returns the system prompt for the active agent.
 // ─────────────────────────────────────────────
-function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMotives) {
-  // Filter to Loulé doctors only for booking/emergency agents
-  const louleDoctors = cachedDoctors.filter(d => LOULE_DOCTOR_IDS.includes(d.medicId));
+function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory) {
+  const louleDoctors  = cachedDoctors.filter(d => LOULE_DOCTOR_IDS.includes(d.medicId));
+  const memoryContext = buildMemoryContext(patientMemory);
 
   switch (agentName) {
-    case 'router':       return routerAgent.buildPrompt(patient, clinicInfo);
-    case 'booking':      return bookingAgent.buildPrompt(patient, clinicInfo, louleDoctors, cachedMotives);
-    case 'appointments': return appointmentsAgent.buildPrompt(patient, clinicInfo);
-    case 'info':         return infoAgent.buildPrompt(patient, clinicInfo);
-    case 'emergency':    return emergencyAgent.buildPrompt(patient, clinicInfo);
-    default:             return routerAgent.buildPrompt(patient, clinicInfo);
+    case 'router':       return routerAgent.buildPrompt(patient, clinicInfo, memoryContext);
+    case 'booking':      return bookingAgent.buildPrompt(patient, clinicInfo, louleDoctors, cachedMotives, memoryContext);
+    case 'appointments': return appointmentsAgent.buildPrompt(patient, clinicInfo, memoryContext);
+    case 'info':         return infoAgent.buildPrompt(patient, clinicInfo, memoryContext);
+    case 'emergency':    return emergencyAgent.buildPrompt(patient, clinicInfo, memoryContext);
+    default:             return routerAgent.buildPrompt(patient, clinicInfo, memoryContext);
+  }
+}
+
+// ─────────────────────────────────────────────
+// GENERATE CALL SUMMARY — runs after hangup
+// Uses gpt-4o-mini (cheap + fast) to extract:
+//   summary, language, preferredDoctor, preferredTime
+// ─────────────────────────────────────────────
+async function generateCallSummary(history, patient) {
+  try {
+    const convo = history
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => {
+        if (m.role === 'user') return `Patient: ${m.content}`;
+        try {
+          const p = JSON.parse(m.content);
+          return p.speak ? `Vicki: ${p.speak}` : null;
+        } catch { return null; }
+      })
+      .filter(Boolean)
+      .join('\n');
+
+    const res = await openai.chat.completions.create({
+      model:       'gpt-4o-mini',
+      temperature: 0,
+      max_tokens:  200,
+      messages: [
+        {
+          role:    'system',
+          content: `Summarise this dental clinic call in 1 sentence. Extract preferences.
+Reply ONLY with valid JSON — no markdown:
+{
+  "summary": "One sentence describing what happened",
+  "language": "en" or "pt",
+  "intent": "booking" | "appointments" | "info" | "emergency" | "general",
+  "preferredDoctor": { "id": <medicId number>, "name": "Dr. Name" } or null,
+  "preferredTime": "morning" | "afternoon" or null
+}`,
+        },
+        { role: 'user', content: convo || 'Short call, no meaningful content.' },
+      ],
+    });
+
+    const raw = res.choices[0].message.content.trim();
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('[Memory] Summary error:', e.message);
+    return { summary: 'Call completed.', language: null, intent: 'general', preferredDoctor: null, preferredTime: null };
   }
 }
 
@@ -289,17 +338,18 @@ async function processTurn({
   patient,
   clinicInfo,
   userText,
-  cachedDoctors = [],
-  cachedMotives = [],
-  currentAgent  = 'router',
-  unclearTurns  = 0,
-  onSpeakReady  = null,
-  pendingSlots  = [],   // server-side slots from last check_slots — used to resolve real slotBase64
-  pendingAppts  = [],   // server-side appointments from last get_appointments — used to resolve real appointmentId for cancel
+  cachedDoctors  = [],
+  cachedMotives  = [],
+  currentAgent   = 'router',
+  unclearTurns   = 0,
+  onSpeakReady   = null,
+  pendingSlots   = [],
+  pendingAppts   = [],
+  patientMemory  = null,   // loaded once at call start — used to personalise all agents
 }) {
   history.push({ role: 'user', content: userText });
 
-  const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives);
+  const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory);
 
   // ── Stream GPT response — extract speak ASAP, start TTS before GPT finishes ──
   const stream = await openai.chat.completions.create({
@@ -462,4 +512,4 @@ async function processTurn({
   return { speak, action, history, currentAgent: nextAgent };
 }
 
-module.exports = { processTurn };
+module.exports = { processTurn, generateCallSummary };

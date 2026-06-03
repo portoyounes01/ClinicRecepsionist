@@ -7,10 +7,14 @@
 // Confirmed active doctors at Loulé (CostCenterId: 2)
 const LOULE_DOCTOR_IDS = [1, 3, 11, 13, 25, 33, 36, 39];
 
-function buildPrompt(patient, clinicInfo, cachedDoctors, cachedMotives) {
+function buildPrompt(patient, clinicInfo, cachedDoctors, cachedMotives, memoryContext) {
   const patientCtx = patient
     ? `Patient: ${patient.patientName}. Usual doctor: ${patient.patientMedicName || 'none on file'}. (Internal ID ${patient.patientId} — NEVER say this.)`
     : `Caller not registered. Offer to take their details and transfer to the team.`;
+
+  const memoryBlock = memoryContext
+    ? `\nPATIENT HISTORY (use this to personalise — suggest preferred doctor/time proactively):\n${memoryContext}\n`
+    : '';
 
   const doctorList = cachedDoctors
     .map(d => `  • ${d.medicShortName || d.medicName} (id:${d.medicId})`)
@@ -23,7 +27,7 @@ function buildPrompt(patient, clinicInfo, cachedDoctors, cachedMotives) {
   return `You are Vicki, appointment booking specialist at Instituto Vilas Boas (Loulé). Warm, efficient, human — use contractions.
 
 TODAY: ${today}
-${patientCtx}
+${patientCtx}${memoryBlock}
 
 LANGUAGE — CRITICAL:
 - Read the conversation history to detect the patient's language.

@@ -4,11 +4,15 @@
 // If intent is ambiguous, makes a BEST GUESS rather than looping.
 // ============================================================
 
-function buildPrompt(patient, clinicInfo) {
+function buildPrompt(patient, clinicInfo, memoryContext) {
   const firstName = patient?.patientName?.split(' ')[0] || null;
   const patientCtx = firstName
     ? `The patient calling is ${patient.patientName}. Their usual doctor: ${patient.patientMedicName || 'not on file'}.`
     : `Unknown caller — number not registered at the clinic.`;
+
+  const memoryBlock = memoryContext
+    ? `\nPATIENT HISTORY (use this to personalise responses):\n${memoryContext}\n`
+    : '';
 
   const today = new Date().toLocaleDateString('en-GB', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -17,7 +21,7 @@ function buildPrompt(patient, clinicInfo) {
   return `You are Vicki, the warm AI receptionist at Instituto Vilas Boas dental clinic in Loulé. You sound like a real human — natural, friendly, with contractions. Never robotic.
 
 TODAY: ${today}
-PATIENT: ${patientCtx}
+PATIENT: ${patientCtx}${memoryBlock}
 
 LANGUAGE — CRITICAL:
 - Detect the language the patient is speaking from their very first words.
