@@ -34,18 +34,20 @@ function humanSlot(isoString) {
   const diffDays = Math.round((slotDay - today) / 86400000);
 
   const weekday = date.toLocaleDateString('en-GB', { weekday: 'long' });
+  const ordinal = d => {
+    const v = d % 100;
+    if (v >= 11 && v <= 13) return `${d}th`;
+    return `${d}${ ['th','st','nd','rd'][d % 10] || 'th' }`;
+  };
+  const monthName = date.toLocaleDateString('en-GB', { month: 'long' });
+
   let dayName;
-  if      (diffDays === 0)              dayName = 'today';
-  else if (diffDays === 1)              dayName = 'tomorrow';
-  else if (diffDays < 7)               dayName = `this ${weekday}`;
-  else if (diffDays < 14)              dayName = `next ${weekday}`;
+  if      (diffDays === 0) dayName = 'today';
+  else if (diffDays === 1) dayName = 'tomorrow';
+  else if (diffDays <= 6)  dayName = `this ${weekday}`;
   else {
-    // 2+ weeks away — use actual date to avoid ambiguity ("Tuesday the 16th")
-    const day = date.getDate();
-    const suffix = day === 1 || day === 21 || day === 31 ? 'st'
-                 : day === 2 || day === 22 ? 'nd'
-                 : day === 3 || day === 23 ? 'rd' : 'th';
-    dayName = `${weekday} the ${day}${suffix}`;
+    // 7+ days — ALWAYS include the actual date, never just "next Monday"
+    dayName = `${weekday} the ${ordinal(date.getDate())} of ${monthName}`;
   }
 
   const h   = date.getHours();
@@ -189,14 +191,20 @@ async function executeAction(action, params, patient) {
 
       // Pick exactly 1 morning (before 13:00) and 1 afternoon/evening (≥13:00)
       // so Vicki always offers just 2 clear choices, never a long list
-      const toSlot = s => ({
-        slotBase64: s.appointmentSlotBase64RawData,
-        medicName:  s.medicShortName || s.medicName,
-        date:       s.appointmentDateBegin?.split('T')[0],
-        time:       s.appointmentDateBegin?.split('T')[1]?.slice(0, 5),
-        display:    s.appointmentEnglishMessage,
-        period:     (() => { const h = parseInt(s.appointmentDateBegin?.split('T')[1] || '0'); return h < 13 ? 'morning' : h < 18 ? 'afternoon' : 'evening'; })(),
-      });
+      const toSlot = s => {
+        const iso = s.appointmentDateBegin;
+        const h   = humanSlot(iso);
+        return {
+          slotBase64:  s.appointmentSlotBase64RawData,
+          medicName:   s.medicShortName || s.medicName,
+          date:        iso?.split('T')[0],
+          displayDate: h.dayName,   // pre-computed — AI MUST use verbatim
+          time:        iso?.split('T')[1]?.slice(0, 5),
+          displayTime: h.timeStr,   // pre-computed time label
+          display:     s.appointmentEnglishMessage,
+          period:      h.period,
+        };
+      };
 
       const morning   = raw.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') < 13);
       const afternoon = raw.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') >= 13);
