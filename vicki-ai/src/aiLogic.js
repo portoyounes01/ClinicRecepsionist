@@ -332,18 +332,8 @@ async function generateCallSummary(history, patient) {
       temperature: 0,
       max_tokens:  250,
       messages: [
-        {
-          role:    'system',
-Reply ONLY with valid JSON — no markdown:
-{
-  "summary": "One sentence describing what happened",
-  "language": "en" or "pt",
-  "intent": "booking" | "appointments" | "info" | "emergency" | "general",
-  "preferredDoctor": { "id": <medicId number>, "name": "Dr. Name" } or null,
-  "preferredTime": "morning" | "afternoon" or null
-}`,
-        },
-        { role: 'user', content: convo || 'Short call, no meaningful content.' },
+        { role: 'system', content: summaryPrompt },
+        { role: 'user',   content: convo || 'Very short call, no meaningful content.' },
       ],
     });
 
