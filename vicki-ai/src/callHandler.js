@@ -180,18 +180,14 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     'manhã', 'tarde', 'amanhã', 'semana', 'segunda', 'terça', 'quarta', 'quinta', 'sexta',
   ].map(w => `${w}:5`);
   const allKeywords    = [...new Set([...doctorKeywords, ...clinicKeywords])];
-  console.log('[STT] Keyword boost active:', allKeywords.slice(0, 6).join(', '), '...');
-
+  console.log('[STT] Keywords active:', allKeywords.slice(0, 4).join(', '), '...');
   const deepgramLive = deepgramClient.listen.live({
-    model:           'nova-2',
-    language:        'pt',           // Primary language Portuguese
-    detect_language: true,           // Auto-detect EN vs PT per utterance
-    smart_format:    true,
+    model:          'nova-2',
+    language:       'pt',
+    encoding:       'linear16',
+    sample_rate:    8000,
     interim_results: true,
-    endpointing:     300,
-    encoding:        'linear16',
-    sample_rate:     8000,
-    filler_words:    false,
+    endpointing:    300,
   });
 
   deepgramLive.on(LiveTranscriptionEvents.Open, () => {
@@ -200,10 +196,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   });
 
   deepgramLive.on(LiveTranscriptionEvents.Error, (err) => {
-    const detail = err?.message || err?.reason || JSON.stringify(err);
-    console.error('[Deepgram] Error:', detail);
-    // Log the API key presence (not value) to help debug auth issues
-    console.error(`[Deepgram] API key set: ${!!process.env.DEEPGRAM_API_KEY} | Key prefix: ${(process.env.DEEPGRAM_API_KEY||'').slice(0,8)}...`);
+    console.error('[Deepgram] FULL ERROR:', JSON.stringify(err, null, 2));
+    console.error('[Deepgram] message:', err?.message);
+    console.error('[Deepgram] status:', err?.status);
+    console.error('[Deepgram] API key set:', !!process.env.DEEPGRAM_API_KEY, '| prefix:', (process.env.DEEPGRAM_API_KEY||'').slice(0,8));
   });
 
   deepgramLive.on(LiveTranscriptionEvents.Close, (ev) => {
