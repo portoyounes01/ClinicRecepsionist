@@ -9,8 +9,9 @@ const { WebSocketServer } = require('ws');
 const http = require('http');
 const { handleCallStream } = require('./callHandler');
 
-// Shared set of callSids that should be hung up on the next keep-alive ping
-const hangupCalls = new Set();
+// Shared sets — checked on every keep-alive ping
+const hangupCalls   = new Set(); // callSid → respond with <Hangup/>
+const transferCalls = new Map(); // callSid → phone number to dial
 
 const app = express();
 app.use(express.json());
@@ -82,7 +83,17 @@ app.post('/telnyx/keep-alive', (req, res) => {
   const host    = req.headers['x-forwarded-host'] || req.headers.host;
   const baseUrl = `https://${host}`;
 
-  // AI signalled hangup — respond with <Hangup> instead of extending
+  // Transfer — bridge the call to a human agent
+  if (callSid && transferCalls.has(callSid)) {
+    const dialNumber = transferCalls.get(callSid).replace(/\s+/g, '');
+    transferCalls.delete(callSid);
+    console.log(`[Telnyx] Transferring call ${callSid} to ${dialNumber}`);
+    return res.type('text/xml').send(
+      `<?xml version="1.0" encoding="UTF-8"?><Response><Dial>${dialNumber}</Dial></Response>`
+    );
+  }
+
+  // Hangup — AI signalled end of call
   if (callSid && hangupCalls.has(callSid)) {
     hangupCalls.delete(callSid);
     console.log(`[Telnyx] Hanging up call ${callSid}`);

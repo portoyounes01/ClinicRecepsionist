@@ -101,7 +101,7 @@ function pcmaToLinear16(buf) {
 // ─────────────────────────────────────────────
 // HANDLE CALL
 // ─────────────────────────────────────────────
-async function handleCallStream(ws, req, hangupCalls = new Set()) {
+async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls = new Map()) {
   let callerNumber        = null;
   let callSid             = null;
   let patient             = null;
@@ -331,7 +331,16 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
       // speakStarted && !actionFired → onSpeakReady TTS handles cleanup
 
       if (result.action === 'transfer_to_human') {
-        console.log('[Call] Transferring to human');
+        if (callEnding) return;
+        callEnding = true;
+        clearTimeout(maxDurationWatchdog);
+        clearInterval(silenceWatchdog);
+        const transferNumber = process.env.CLINIC_PHONE_MOBILE || '+351962432761';
+        console.log(`[Call] Transferring to human — ${transferNumber}`);
+        // Add to transfer set — next keep-alive (within 12s) will dial the number
+        if (callSid) transferCalls.set(callSid, transferNumber);
+        // Close WebSocket — Telnyx handles the bridge from here
+        setTimeout(() => { try { ws.close(); } catch (_) {} }, 500);
       }
 
       if (result.action === 'hangup') {
