@@ -448,10 +448,10 @@ async function processTurn({
       return { speak, action: 'none', history, currentAgent: nextAgent, unclearTurns: 0 };
     }
 
-    // Intent still unclear — transfer to human after 3 tries (avoids infinite loop)
+    // Intent still unclear — transfer to human after 5 tries (avoids infinite loop)
     const newUnclearTurns = unclearTurns + 1;
-    if (newUnclearTurns >= 3) {
-      console.log('[Agent] Stuck after 3 unclear turns — transferring to human');
+    if (newUnclearTurns >= 5) {
+      console.log('[Agent] Stuck after 5 unclear turns — transferring to human');
       history.push({ role: 'assistant', content: JSON.stringify(parsed) });
       const firstName = patient?.patientName?.split(' ')[0];
       const fallbackSpeak = firstName

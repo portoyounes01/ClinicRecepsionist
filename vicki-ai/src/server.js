@@ -87,7 +87,7 @@ app.post('/telnyx/keep-alive', (req, res) => {
   if (callSid && transferCalls.has(callSid)) {
     const dialNumber = transferCalls.get(callSid).replace(/\s+/g, '');
     transferCalls.delete(callSid);
-    console.log(`[Telnyx] Transferring call ${callSid} to ${dialNumber}`);
+    console.log(`[Telnyx] Keep-alive → TRANSFER ${callSid} to ${dialNumber}`);
     return res.type('text/xml').send(
       `<?xml version="1.0" encoding="UTF-8"?><Response><Dial>${dialNumber}</Dial></Response>`
     );
@@ -96,11 +96,11 @@ app.post('/telnyx/keep-alive', (req, res) => {
   // Hangup — AI signalled end of call
   if (callSid && hangupCalls.has(callSid)) {
     hangupCalls.delete(callSid);
-    console.log(`[Telnyx] Hanging up call ${callSid}`);
+    console.log(`[Telnyx] Keep-alive → HANGUP ${callSid}`);
     return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
   }
 
-  console.log('[Telnyx] Keep-alive ping — extending call');
+  console.log(`[Telnyx] Keep-alive → Extend session | SID: ${callSid || 'unknown'}`);
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Pause length="12"/>
@@ -108,6 +108,7 @@ app.post('/telnyx/keep-alive', (req, res) => {
 </Response>`);
 
 });
+
 
 // ─────────────────────────────────────────────
 // SILENCE WAV — Served as audio filler if needed
