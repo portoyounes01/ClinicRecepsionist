@@ -199,8 +199,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     console.log('[Deepgram] Connection open');
   });
 
-  deepgramLive.on(LiveTranscriptionEvents.Error, (err) =>
-    console.error('[Deepgram] Error:', err?.message || JSON.stringify(err)));
+  deepgramLive.on(LiveTranscriptionEvents.Error, (err) => {
+    const detail = err?.message || err?.reason || JSON.stringify(err);
+    console.error('[Deepgram] Error:', detail);
+    // Log the API key presence (not value) to help debug auth issues
+    console.error(`[Deepgram] API key set: ${!!process.env.DEEPGRAM_API_KEY} | Key prefix: ${(process.env.DEEPGRAM_API_KEY||'').slice(0,8)}...`);
+  });
 
   deepgramLive.on(LiveTranscriptionEvents.Close, (ev) => {
     deepgramOpen = false;
@@ -424,15 +428,17 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           break;
 
         case 'start':
-          // Try all known Telnyx field names for the call ID
-          callSid = msg.start?.callSid
+          // Telnyx sends call_control_id as the call identifier in TeXML streams
+          callSid = msg.start?.call_control_id
+                 || msg.start?.callSid
                  || msg.start?.call_sid
                  || msg.start?.CallSid
                  || msg.streamSid
                  || null;
-          callerNumber = msg.start?.customParameters?.callerNumber || msg.start?.from || null;
+          callerNumber = msg.start?.customParameters?.callerNumber
+                      || msg.start?.from
+                      || null;
           console.log(`[Call] Started. Caller: ${callerNumber} | SID: ${callSid}`);
-          console.log(`[Call] start payload keys: ${Object.keys(msg.start || {}).join(', ')}`);
 
           // ── Look up patient name BEFORE speaking ─────────────────────────────────
           // Race: lookup vs 2-second ring delay.
