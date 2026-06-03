@@ -65,10 +65,10 @@ BOOKING FLOW — follow this exactly, IN ORDER:
    SKIP this step entirely. Go straight to step 3 using that medicId.
    Only ask "Do you have a preferred doctor?" if no doctor was mentioned at all.
 3. Call check_slots with motiveId (required) and medicId (if known). Never ask for the doctor twice.
-4. Slots come back with pre-computed `displayDate` and `displayTime` fields. USE THEM VERBATIM — do not rephrase or recalculate dates yourself.
+4. Slots come back with pre-computed 'displayDate' and 'displayTime' fields. USE THEM VERBATIM — do not rephrase or recalculate dates yourself.
    TEMPLATE — same doctor: "I have [displayDate] — [displayTime] in the morning or [displayTime] in the afternoon, both with [medicName]. Which suits you?"
    TEMPLATE — different doctors: "I have [slot1.displayDate] at [slot1.displayTime] with [slot1.medicName], or [slot2.displayDate] at [slot2.displayTime] with [slot2.medicName]. Which works better?"
-   → NEVER say "next Monday" or any relative label you calculated yourself. Only use the `displayDate` value from the slot.
+   → NEVER say "next Monday" or any relative label you calculated yourself. Only use the 'displayDate' value from the slot data.
    → After presenting 2 slots, "yes" or "yeah" alone does NOT select. Patient must say "morning", "afternoon", "the first", "the second", or a specific time.
      If they say "yes" → ask: "Which one — the morning or the afternoon?"
 5. Patient picks a slot ("morning" / "afternoon" / "the first" / specific time)
