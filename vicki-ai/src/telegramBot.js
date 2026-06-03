@@ -228,6 +228,15 @@ function start() {
 
   console.log('[Telegram] Bot started ✅');
 
+  // Set the Menu commands (shows "Menu" button in Telegram chat bar)
+  bot.setMyCommands([
+    { command: 'status',  description: '📊 Today\'s call stats' },
+    { command: 'report',  description: '🔍 Run analysis now' },
+    { command: 'pending', description: '⏳ Review pending fixes' },
+    { command: 'start',   description: '👋 Welcome & help' },
+  ]).then(() => console.log('[Telegram] Command menu set ✅'))
+    .catch(e  => console.error('[Telegram] setMyCommands error:', e.message));
+
   // Security — ignore messages from unknown chats
   const guard = (msg) => {
     if (allowedChatId && String(msg.chat.id) !== String(allowedChatId)) {
