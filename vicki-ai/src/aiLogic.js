@@ -101,8 +101,13 @@ function formatActionResponse(action, actionResult) {
         const amT = humanSlot(am.date + 'T' + am.time);
         const pmT = humanSlot(pm.date + 'T' + pm.time);
         const day = amT.dayName === pmT.dayName ? amT.dayName : `${amT.dayName} or ${pmT.dayName}`;
-        // am/pm suffix already implies period — no need to add "in the morning/afternoon"
-        speak = `I've got ${day} — ${amT.timeStr} with ${am.medicName}, or ${pmT.timeStr} with ${pm.medicName}. Which works better for you?`;
+
+        if (am.medicName === pm.medicName) {
+          // Same doctor — don't repeat name twice
+          speak = `I've got ${day} with ${am.medicName} — ${amT.timeStr} in the morning or ${pmT.timeStr} in the afternoon. Which works better for you?`;
+        } else {
+          speak = `I've got ${day} — ${amT.timeStr} with ${am.medicName}, or ${pmT.timeStr} with ${pm.medicName}. Which works better for you?`;
+        }
       }
 
       return {
