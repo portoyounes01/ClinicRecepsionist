@@ -206,9 +206,50 @@ async function executeAction(action, params, patient) {
         };
       };
 
-      const morning   = raw.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') < 13);
-      const afternoon = raw.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') >= 13);
-      const slots = [morning, afternoon].filter(Boolean).map(toSlot);
+      // ── Smart slot picking ───────────────────────────────────────────────
+      // Goal: ONE date, ONE doctor, offer morning + afternoon on that same day.
+      // Priority: find a doctor who has BOTH morning and afternoon on the earliest day.
+      // Fallback: any doctor with at least one slot on the earliest day.
+
+      // Group raw slots by date (ISO date string)
+      const byDate = {};
+      for (const s of raw) {
+        const d = s.appointmentDateBegin?.split('T')[0];
+        if (d) { if (!byDate[d]) byDate[d] = []; byDate[d].push(s); }
+      }
+      const sortedDates = Object.keys(byDate).sort();
+
+      let pickedMorning = null, pickedAfternoon = null;
+
+      for (const date of sortedDates) {
+        const daySlots = byDate[date];
+
+        // Group by doctor within this day
+        const byDoc = {};
+        for (const s of daySlots) {
+          const id = s.medicId || s.medicShortName || s.medicName;
+          if (!byDoc[id]) byDoc[id] = [];
+          byDoc[id].push(s);
+        }
+
+        // Try to find a doctor with BOTH morning AND afternoon
+        for (const docSlots of Object.values(byDoc)) {
+          const m = docSlots.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') < 13);
+          const a = docSlots.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') >= 13);
+          if (m && a) { pickedMorning = m; pickedAfternoon = a; break; }
+        }
+        if (pickedMorning && pickedAfternoon) break;
+
+        // Fallback: any doctor with at least one slot on this day
+        for (const docSlots of Object.values(byDoc)) {
+          const m = docSlots.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') < 13);
+          const a = docSlots.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') >= 13);
+          if (m || a) { pickedMorning = m || null; pickedAfternoon = a || null; break; }
+        }
+        if (pickedMorning || pickedAfternoon) break;
+      }
+
+      const slots = [pickedMorning, pickedAfternoon].filter(Boolean).map(toSlot);
       return { slots: slots.length ? slots : [toSlot(raw[0])] };
     }
 
