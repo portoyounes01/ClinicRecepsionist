@@ -68,9 +68,10 @@ app.post('/telnyx/inbound', (req, res) => {
       <Parameter name="callerNumber" value="${from}" />
     </Stream>
   </Start>
-  <Pause length="55"/>
+  <Pause length="12"/>
   <Redirect method="POST">${baseUrl}/telnyx/keep-alive</Redirect>
 </Response>`);
+
 });
 
 // ─────────────────────────────────────────────
@@ -91,9 +92,10 @@ app.post('/telnyx/keep-alive', (req, res) => {
   console.log('[Telnyx] Keep-alive ping — extending call');
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Pause length="55"/>
+  <Pause length="12"/>
   <Redirect method="POST">${baseUrl}/telnyx/keep-alive</Redirect>
 </Response>`);
+
 });
 
 // ─────────────────────────────────────────────

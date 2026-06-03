@@ -103,9 +103,9 @@ function pcmaToLinear16(buf) {
 // ─────────────────────────────────────────────
 async function handleCallStream(ws, req, hangupCalls = new Set()) {
   let callerNumber        = null;
-  let callSid             = null;   // Telnyx CallSid — used to trigger hangup
+  let callSid             = null;
   let patient             = null;
-  let patientMemory       = null;   // loaded once at call start
+  let patientMemory       = null;
   let cachedDoctors       = [];
   let cachedMotives       = [];
   let conversationHistory = [];
@@ -114,11 +114,49 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
   let isSpeaking          = false;
   let currentAbort        = null;
   let deepgramOpen        = false;
-  let pendingTranscript   = '';   // accumulates rapid FINAL chunks
-  let processingTimer     = null; // debounce timer before sending to AI
-  let pendingSlots        = [];   // slots from last check_slots — real slotBase64 values
-  let pendingAppts        = [];   // appointments from last get_appointments — real appointmentId values
-  const callStartTime     = Date.now();  // for duration logging
+  let pendingTranscript   = '';
+  let processingTimer     = null;
+  let pendingSlots        = [];
+  let pendingAppts        = [];
+  const callStartTime     = Date.now();
+  let lastSpeechTime      = Date.now(); // tracks last patient utterance
+  let callEnding          = false;      // prevents double-hangup
+
+  // ── Watchdog 1: Max call duration (15 min) ────────────────────────────────
+  // If a call is still open after 15 min something went wrong — auto-hangup.
+  const maxDurationWatchdog = setTimeout(() => {
+    if (callEnding) return;
+    callEnding = true;
+    console.log('[Watchdog] Max duration reached (15 min) — auto-hangup');
+    speak(
+      "I'm so sorry, we've been connected for a while and I need to free the line. Please call us back if you need anything — goodbye!",
+      ws, () => {
+        if (callSid) hangupCalls.add(callSid);
+        try { ws.close(); } catch (_) {}
+      }, (fn) => { currentAbort = fn; }
+    );
+  }, 15 * 60 * 1000); // 15 minutes
+
+  // ── Watchdog 2: Silence detector (90s no speech → goodbye) ───────────────
+  // If patient goes silent for 90s, Vicki says goodbye and ends the call.
+  const silenceWatchdog = setInterval(() => {
+    if (callEnding || isSpeaking) return;
+    const silenceSec = Math.round((Date.now() - lastSpeechTime) / 1000);
+    if (silenceSec >= 90) {
+      callEnding = true;
+      clearInterval(silenceWatchdog);
+      console.log(`[Watchdog] ${silenceSec}s silence — ending call`);
+      speak(
+        "I haven't heard from you in a moment — I'll let you go. Feel free to call us back anytime. Goodbye!",
+        ws, () => {
+          if (callSid) hangupCalls.add(callSid);
+          try { ws.close(); } catch (_) {}
+        }, (fn) => { currentAbort = fn; }
+      );
+    }
+  }, 15000); // check every 15 seconds
+
+
 
   // ── Create Deepgram immediately — gives it time to open before first media ──
   // The SDK queues audio internally while connecting, so no readyState check needed.
@@ -170,12 +208,14 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
   });
 
   // ── Transcript handler ──
+  // Update silence timer on every transcript
   deepgramLive.on(LiveTranscriptionEvents.Transcript, async (data) => {
     const alt        = data.channel?.alternatives?.[0];
     const raw        = alt?.transcript?.trim();
     const confidence = alt?.confidence ?? 1;
     const isFinal    = data.is_final;
     if (!raw) return;
+    if (isFinal) lastSpeechTime = Date.now(); // reset silence watchdog
 
     // ── Confidence filter — skip near-noise transcripts ──────────────
     if (isFinal && confidence < 0.40) {
@@ -295,7 +335,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
       }
 
       if (result.action === 'hangup') {
+        if (callEnding) return; // already ending
+        callEnding = true;
+        clearTimeout(maxDurationWatchdog);
+        clearInterval(silenceWatchdog);
         console.log('[Call] AI requested hangup — closing stream');
+
         // Farewell already spoken. Save memory + log call async (don’t block hangup).
         const durationSeconds = Math.round((Date.now() - callStartTime) / 1000);
         generateCallSummary(conversationHistory, patient)
@@ -441,6 +486,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set()) {
 
   ws.on('close', () => {
     console.log('[Call] Closed');
+    clearTimeout(maxDurationWatchdog);
+    clearInterval(silenceWatchdog);
     try { deepgramLive.requestClose(); } catch (_) {}
   });
 
