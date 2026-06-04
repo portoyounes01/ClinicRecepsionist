@@ -124,6 +124,62 @@ function explicitBeforeDateTo(userText, referenceDate) {
   return addDaysIso(target.toISOString().split('T')[0], -1);
 }
 
+function normalizeBookingReasonText(value) {
+  if (!value || typeof value !== 'string') return null;
+  const cleaned = value
+    .replace(/\s+/g, ' ')
+    .replace(/^["']|["']$/g, '')
+    .trim();
+  if (!cleaned) return null;
+  if (/^(yes|yeah|ok|okay|sure|please|book it|confirm|go ahead)$/i.test(cleaned)) return null;
+  return cleaned.length > 180 ? cleaned.slice(0, 177).trim() + '...' : cleaned;
+}
+
+function inferBookingReasonText(userText, params = {}, existing = null) {
+  const explicit = normalizeBookingReasonText(
+    params.reasonText || params.bookingReasonText || params.reasonForVisit
+  );
+  if (explicit) return explicit;
+
+  const text = (userText || '').toLowerCase();
+  const reasonPatterns = [
+    ['teeth cleaning', /\bteeth cleaning\b/],
+    ['scale and polish', /\bscale and polish\b/],
+    ['cleaning', /\b(cleaning|clean|hygiene|scaling)\b/],
+    ['check-up', /\b(check[- ]?up|checkup|routine visit)\b/],
+    ['evaluation', /\b(evaluation|consultation|assessment)\b/],
+    ['follow-up', /\b(follow[- ]?up)\b/],
+    ['implant check', /\bimplant check\b/],
+    ['braces check', /\bbraces check\b/],
+    ['orthodontics', /\borthodontics?\b/],
+    ['filling', /\b(fillings?|cavity)\b/],
+    ['whitening', /\bwhitening\b/],
+    ['veneer', /\bveneers?\b/],
+    ['tooth pain', /\b(toothache|tooth pain|pain)\b/],
+    ['broken tooth', /\b(broken tooth|tooth broke|chipped tooth)\b/],
+    ['swelling', /\bswelling\b/],
+    ['bleeding', /\bbleeding\b/],
+    ['urgent appointment', /\b(urgent|emergency|can't wait)\b/],
+  ];
+
+  const matched = reasonPatterns.find(([, pattern]) => pattern.test(text));
+  if (matched) return matched[0];
+
+  const motiveName = normalizeBookingReasonText(params.motiveName);
+  if (motiveName && !/^(consulta|avaliacao|avaliação|ach|on|ur)$/i.test(motiveName)) {
+    return motiveName;
+  }
+
+  return existing;
+}
+
+function bookingObservation(reasonText) {
+  const reason = normalizeBookingReasonText(reasonText);
+  return reason
+    ? `Marcação via Vicki AI. Motivo informado pelo paciente: ${reason}`
+    : 'Marcação via Vicki AI';
+}
+
 // ─────────────────────────────────────────────
 // PROGRAMMATIC RESPONSE FORMATTER
 // Converts raw Newsoft API data into spoken text.
@@ -352,11 +408,12 @@ async function executeAction(action, params, patient) {
           || params._pendingSlots[0];
         if (chosen) resolvedBase64 = chosen.slotBase64;
       }
+      console.log(`[Booking] Reason for observation: ${params._bookingReasonText || '(none)'}`);
       const booked = await newsoft.bookAppointment({
         patientId:   patient.patientId,
         slotBase64:  resolvedBase64,
         motiveName:  params.motiveName || 'Consulta',
-        observation: 'Marcação via Vicki AI',
+        observation: bookingObservation(params._bookingReasonText),
       });
       return { appointmentId: booked[0]?.appointmentId };
     }
@@ -484,6 +541,7 @@ async function processTurn({
   pendingAppts   = [],
   patientMemory  = null,
   lastOfferedDate = null,   // date of last slot offered — skip past it on next search
+  bookingReasonText = null,
 }) {
   history.push({ role: 'user', content: userText });
 
@@ -553,6 +611,7 @@ async function processTurn({
 
   let { speak, action = 'none', params = {}, intent } = parsed;
   let nextAgent = currentAgent;
+  const updatedBookingReasonText = inferBookingReasonText(userText, params, bookingReasonText);
 
   console.log(`[Agent:${currentAgent}] intent="${intent}" action="${action}" speak="${speak?.slice(0, 60)}..."`);
 
@@ -565,7 +624,7 @@ async function processTurn({
     // Patient said goodbye at the very start — hang up gracefully
     if (intent === 'goodbye') {
       history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-      return { speak, action: 'hangup', history, currentAgent: 'router', unclearTurns: 0 };
+      return { speak, action: 'hangup', history, currentAgent: 'router', unclearTurns: 0, bookingReasonText: updatedBookingReasonText };
     }
 
     if (intent && intent !== 'unclear' && intentMap[intent]) {
@@ -580,10 +639,11 @@ async function processTurn({
           history,
           currentAgent: 'human',
           unclearTurns: 0,
+          bookingReasonText: updatedBookingReasonText,
         };
       }
 
-      return { speak, action: 'none', history, currentAgent: nextAgent, unclearTurns: 0 };
+      return { speak, action: 'none', history, currentAgent: nextAgent, unclearTurns: 0, bookingReasonText: updatedBookingReasonText };
     }
 
     // Intent still unclear — transfer to human after 5 tries (avoids infinite loop)
@@ -595,11 +655,11 @@ async function processTurn({
       const fallbackSpeak = firstName
         ? `Sorry ${firstName}, let me connect you with one of our team members who can help you directly — one moment please.`
         : `Let me connect you with one of our team who can help you directly — one moment please.`;
-      return { speak: fallbackSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0 };
+      return { speak: fallbackSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0, bookingReasonText: updatedBookingReasonText };
     }
 
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-    return { speak, action: 'none', history, currentAgent: 'router', unclearTurns: newUnclearTurns };
+    return { speak, action: 'none', history, currentAgent: 'router', unclearTurns: newUnclearTurns, bookingReasonText: updatedBookingReasonText };
   }
 
   // ── 2. TRANSFER ACTIONS ───────────────────────────────────
@@ -610,17 +670,18 @@ async function processTurn({
       action: 'transfer_to_human',
       history,
       currentAgent: 'human',
+      bookingReasonText: updatedBookingReasonText,
     };
   }
 
   if (action === 'transfer_to_booking') {
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-    return { speak, action: 'none', history, currentAgent: 'booking' };
+    return { speak, action: 'none', history, currentAgent: 'booking', bookingReasonText: updatedBookingReasonText };
   }
 
   if (action === 'hangup') {
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-    return { speak, action: 'hangup', history, currentAgent };
+    return { speak, action: 'hangup', history, currentAgent, bookingReasonText: updatedBookingReasonText };
   }
 
   // ── 3. API ACTIONS — execute + format programmatically ────
@@ -628,7 +689,7 @@ async function processTurn({
     try {
       // Inject server-side state into params so executeAction can resolve real IDs
       const enrichedParams = action === 'book_appointment'
-        ? { ...params, _pendingSlots: pendingSlots }
+        ? { ...params, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText }
         : action === 'cancel_appointment'
           ? { ...params, _pendingAppts: pendingAppts }
           : action === 'check_slots'
@@ -637,6 +698,7 @@ async function processTurn({
                 _lastOfferedDate: lastOfferedDate,
                 _slotSearchDirection: params.searchDirection || inferSlotSearchDirection(userText),
                 _explicitDateTo: explicitBeforeDateTo(userText, lastOfferedDate),
+                _bookingReasonText: updatedBookingReasonText,
               }
             : params;
       const actionResult = await executeAction(action, enrichedParams, patient);
@@ -662,6 +724,7 @@ async function processTurn({
             pendingSlots:    formatted.pendingSlots,
             pendingAppts:    formatted.pendingAppointments,
             lastOfferedDate: actionResult.lastOfferedDate ?? lastOfferedDate,
+            bookingReasonText: updatedBookingReasonText,
           };
         }
       }
@@ -673,13 +736,13 @@ async function processTurn({
         ? "I'm sorry, I had a problem reaching the scheduling system. Could you try saying the doctor's name and reason again?"
         : "I'm having a small technical issue — please hold a moment and I'll try again.";
       history.push({ role: 'assistant', content: JSON.stringify({ speak: errSpeak, action: 'none' }) });
-      return { speak: errSpeak, action: 'none', history, currentAgent };
+      return { speak: errSpeak, action: 'none', history, currentAgent, bookingReasonText: updatedBookingReasonText };
     }
   } else {
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
   }
 
-  return { speak, action, history, currentAgent: nextAgent };
+  return { speak, action, history, currentAgent: nextAgent, bookingReasonText: updatedBookingReasonText };
 }
 
 module.exports = { processTurn, generateCallSummary };

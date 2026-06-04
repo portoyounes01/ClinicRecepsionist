@@ -37,16 +37,39 @@ function clearTelnyxAudio(telnyxWs, reason = '') {
   console.log(`[TTS] Telnyx clear sent${reason ? ` (${reason})` : ''}`);
 }
 
+function playbackFallbackMs(bytesSent) {
+  // ElevenLabs pcm_8000 is 8kHz, 16-bit PCM: about 16KB per second of playback.
+  const estimatedMs = Math.ceil((bytesSent / 16000) * 1000);
+  return Math.min(120000, Math.max(2500, estimatedMs + 3000));
+}
+
 // ─────────────────────────────────────────────
 // SPEAK — stream ElevenLabs audio to Telnyx
 // ─────────────────────────────────────────────
-async function speak(text, telnyxWs, onDone, getAbort) {
+async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
   if (!text?.trim() || telnyxWs.readyState !== 1) { if (onDone) onDone(); return; }
 
   const ttsStart = Date.now();
   let streamReadyAt = null;
   let firstMediaAt = null;
   let bytesSent = 0;
+  let unregisterPlaybackDone = null;
+  let fallbackTimer = null;
+  let finished = false;
+
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (unregisterPlaybackDone) {
+      unregisterPlaybackDone();
+      unregisterPlaybackDone = null;
+    }
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = null;
+    }
+    if (onDone) onDone();
+  };
 
   console.log(`[TTS] Vicki says: "${text}"`);
   let aborted = false;
@@ -55,6 +78,7 @@ async function speak(text, telnyxWs, onDone, getAbort) {
       if (aborted) return;
       aborted = true;
       clearTelnyxAudio(telnyxWs, reason);
+      finish();
     });
   }
 
@@ -103,23 +127,33 @@ async function speak(text, telnyxWs, onDone, getAbort) {
     flush();
 
     if (!aborted) {
-      telnyxWs.send(JSON.stringify({ event: 'mark', mark: { name: 'vicki_done_speaking' } }));
+      const markName = playbackControls.nextMarkName
+        ? playbackControls.nextMarkName()
+        : 'vicki_done_speaking';
+      const fallbackMs = playbackFallbackMs(bytesSent);
+
+      telnyxWs.send(JSON.stringify({ event: 'mark', mark: { name: markName } }));
+      if (playbackControls.registerDone) {
+        unregisterPlaybackDone = playbackControls.registerDone(markName, finish, fallbackMs);
+      } else {
+        fallbackTimer = setTimeout(finish, fallbackMs);
+      }
       console.log(
         `[TTS] Audio sent | stream_ready_ms=${streamReadyAt ? streamReadyAt - ttsStart : 'none'} ` +
         `first_media_ms=${firstMediaAt ? firstMediaAt - ttsStart : 'none'} ` +
-        `total_ms=${Date.now() - ttsStart} bytes=${bytesSent}`
+        `total_ms=${Date.now() - ttsStart} bytes=${bytesSent} mark=${markName} fallback_ms=${fallbackMs}`
       );
     } else {
       console.log(
         `[TTS] Interrupted | first_media_ms=${firstMediaAt ? firstMediaAt - ttsStart : 'none'} ` +
         `total_ms=${Date.now() - ttsStart} bytes=${bytesSent}`
       );
+      finish();
     }
   } catch (err) {
     if (!aborted) console.error('[TTS] Error:', err.message);
+    finish();
   }
-
-  if (onDone) onDone();
 }
 
 // ─────────────────────────────────────────────
@@ -158,10 +192,46 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let pendingSlots        = [];
   let pendingAppts        = [];
   let lastOfferedDate     = null;   // date of last slot shown — next search skips past it
+  let bookingReasonText   = null;
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
   let callEnding          = false;      // prevents double-hangup
   let loudPackets         = 0;          // consecutive loud audio packets (for audio barge-in)
+  let speechSeq           = 0;
+  const playbackDoneHandlers = new Map();
+
+  const playbackControls = {
+    nextMarkName: () => `vicki_done_speaking_${Date.now()}_${++speechSeq}`,
+    registerDone: (markName, done, fallbackMs) => {
+      let active = true;
+      const timeout = setTimeout(() => {
+        if (!active) return;
+        active = false;
+        playbackDoneHandlers.delete(markName);
+        console.log(`[TTS] Playback done by fallback | mark=${markName} fallback_ms=${fallbackMs}`);
+        done();
+      }, fallbackMs);
+
+      playbackDoneHandlers.set(markName, () => {
+        if (!active) return;
+        active = false;
+        clearTimeout(timeout);
+        playbackDoneHandlers.delete(markName);
+        console.log(`[TTS] Playback mark received | mark=${markName}`);
+        done();
+      });
+
+      return () => {
+        if (!active) return;
+        active = false;
+        clearTimeout(timeout);
+        playbackDoneHandlers.delete(markName);
+      };
+    },
+  };
+
+  const speakToCaller = (text, onDone) =>
+    speak(text, ws, onDone, (fn) => { currentAbort = fn; }, playbackControls);
 
   // ── Watchdog 1: Max call duration (15 min) ────────────────────────────────
   // If a call is still open after 15 min something went wrong — auto-hangup.
@@ -169,12 +239,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     if (callEnding) return;
     callEnding = true;
     console.log('[Watchdog] Max duration reached (15 min) — auto-hangup');
-    speak(
+    speakToCaller(
       "I'm so sorry, we've been connected for a while and I need to free the line. Please call us back if you need anything — goodbye!",
-      ws, () => {
+      () => {
         if (callSid) hangupCalls.add(callSid);
         try { ws.close(); } catch (_) {}
-      }, (fn) => { currentAbort = fn; }
+      }
     );
   }, 15 * 60 * 1000); // 15 minutes
 
@@ -187,12 +257,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       callEnding = true;
       clearInterval(silenceWatchdog);
       console.log(`[Watchdog] ${silenceSec}s silence — ending call`);
-      speak(
+      speakToCaller(
         "I haven't heard from you in a moment — I'll let you go. Feel free to call us back anytime. Goodbye!",
-        ws, () => {
+        () => {
           if (callSid) hangupCalls.add(callSid);
           try { ws.close(); } catch (_) {}
-        }, (fn) => { currentAbort = fn; }
+        }
       );
     }
   }, 15000); // check every 15 seconds
@@ -309,8 +379,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     isSpeaking = true;
     console.log(`[AI] Processing: "${userText}"`);
 
-    const speakNow = (text, onDone) =>
-      speak(text, ws, onDone, (fn) => { currentAbort = fn; });
+    const speakNow = (text, onDone) => speakToCaller(text, onDone);
 
     try {
       let speakStarted    = false;
@@ -320,19 +389,13 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       const immediateBridge = lookupBridgeFor(userText, currentAgent, pendingSlots);
       if (immediateBridge) {
         speakStarted = true;
-        speak(immediateBridge, ws,
-          () => { isSpeaking = false; currentAbort = null; bridgeDone(); },
-          (fn) => { currentAbort = fn; }
-        );
+        speakToCaller(immediateBridge, () => { isSpeaking = false; currentAbort = null; bridgeDone(); });
       }
 
       const onSpeakReady = (earlyText) => {
         if (!speakStarted && isSpeaking) {
           speakStarted = true;
-          speak(earlyText, ws,
-            () => { isSpeaking = false; currentAbort = null; bridgeDone(); },
-            (fn) => { currentAbort = fn; }
-          );
+          speakToCaller(earlyText, () => { isSpeaking = false; currentAbort = null; bridgeDone(); });
         }
       };
 
@@ -350,6 +413,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         pendingAppts,
         patientMemory,
         lastOfferedDate,
+        bookingReasonText,
       });
 
       conversationHistory = result.history;
@@ -358,6 +422,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       if (result.pendingSlots   && result.pendingSlots.length)  pendingSlots  = result.pendingSlots;
       if (result.pendingAppts   && result.pendingAppts.length)  pendingAppts  = result.pendingAppts;
       if (result.lastOfferedDate !== undefined) lastOfferedDate = result.lastOfferedDate;
+      if (result.bookingReasonText !== undefined) bookingReasonText = result.bookingReasonText;
 
       // ── Speak the response ───────────────────────────────────────────
       if (result.actionFired && result.speak) {
@@ -531,14 +596,14 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
               }
 
               isSpeaking = true;
-              speak(greeting, ws, () => { isSpeaking = false; }, (fn) => { currentAbort = fn; });
+              speakToCaller(greeting, () => { isSpeaking = false; currentAbort = null; });
 
             } catch (err) {
               console.error('[Startup] Error:', err.message);
               isSpeaking = true;
-              speak(
+              speakToCaller(
                 "Hello! I'm Vicki, Instituto Vilas Boas's virtual assistant. How can I help you today?",
-                ws, () => { isSpeaking = false; }, (fn) => { currentAbort = fn; }
+                () => { isSpeaking = false; currentAbort = null; }
               );
             }
           })();
@@ -554,7 +619,17 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           break;
 
         case 'mark':
-          if (msg.mark?.name === 'vicki_done_speaking') isSpeaking = false;
+          if (msg.mark?.name) {
+            const done = playbackDoneHandlers.get(msg.mark.name);
+            if (done) {
+              done();
+            } else if (msg.mark.name === 'vicki_done_speaking') {
+              isSpeaking = false;
+              currentAbort = null;
+            } else {
+              console.log(`[TTS] Untracked playback mark | mark=${msg.mark.name}`);
+            }
+          }
           break;
 
         case 'stop':
