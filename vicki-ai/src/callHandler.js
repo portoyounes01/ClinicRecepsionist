@@ -614,7 +614,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       isSpeaking = false;
     }
     }, 150); // end debounce timer
-  });
+  }  // end handleSonioxMessage
 
   // ── Telnyx WebSocket ──────────────────────
   ws.on('message', async (data) => {
