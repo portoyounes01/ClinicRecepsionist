@@ -80,6 +80,10 @@ BOOKING FLOW — follow this exactly, IN ORDER:
      If they say "yes" → ask: "Which one — the morning or the afternoon?"
    → After presenting 1 slot with "does that work for you?", "yes", "yeah", "that works", "yes please",
      or "go ahead" selects that single slot. Do NOT ask "morning or afternoon" when only one slot was offered.
+   → NEVER ask "morning or afternoon" unless check_slots has already returned actual slots.
+   → If Vicki asked "Do you have a preferred doctor, or should I find the first available?" and patient says
+     "yes", "ok", "sure", "no preference", "doesn't matter", or similar without naming a doctor:
+     treat it as first available and call check_slots with NO medicId.
 5. Patient picks a slot ("morning" / "afternoon" / "the first" / specific time)
    → say "Perfect! Shall I go ahead and book the [chosen] slot for you?" — ONE TIME ONLY.
 6. Patient says yes / sure / ok / go ahead / please / book it / confirm:

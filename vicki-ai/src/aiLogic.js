@@ -180,6 +180,66 @@ function bookingObservation(reasonText) {
     : 'Marcação via Vicki AI';
 }
 
+function inferMotiveIdFromReasonText(reasonText) {
+  const text = (reasonText || '').toLowerCase();
+  if (!text) return null;
+  if (/\b(pain|toothache|broken|swelling|bleeding|urgent|emergency|can't wait)\b/.test(text)) return 'UR';
+  if (/\b(not sure|don't know|general enquiry|question)\b/.test(text)) return 'ON';
+  return 'ACH';
+}
+
+function isAffirmationOnly(userText) {
+  return /^(yes|yeah|yep|ok|okay|sure|please|yes please|go ahead|first available|no preference|doesn'?t matter)(?:\s+\1)*[.!?]*$/i
+    .test((userText || '').trim());
+}
+
+function lastAssistantSpeak(history) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (msg.role !== 'assistant') continue;
+    try {
+      const parsed = JSON.parse(msg.content);
+      if (parsed.speak) return parsed.speak;
+    } catch (_) {}
+  }
+  return '';
+}
+
+function applyBookingStateGuard({ currentAgent, action, speak, params, userText, pendingSlots, history, bookingReasonText }) {
+  if (currentAgent !== 'booking' || pendingSlots?.length) return { action, speak, params };
+
+  const previousSpeak = lastAssistantSpeak(history);
+  const askedDoctorPreference = /\bpreferred doctor\b|\bfirst available\b/i.test(previousSpeak);
+  const reasonText = params.reasonText || bookingReasonText;
+  const motiveId = params.motiveId || inferMotiveIdFromReasonText(reasonText);
+
+  if (action === 'none' && askedDoctorPreference && isAffirmationOnly(userText) && motiveId) {
+    return {
+      action: 'check_slots',
+      speak: "Perfect — I'll check the first available appointment for you.",
+      params: { ...params, motiveId, reasonText },
+    };
+  }
+
+  const asksForUnseenSlotChoice = /\bwhich one\b.*\b(morning|afternoon)\b|\bmorning or (?:the )?afternoon\b/i.test(speak || '');
+  if (action === 'none' && asksForUnseenSlotChoice) {
+    if (motiveId) {
+      return {
+        action: 'check_slots',
+        speak: "Let me check the available times for you.",
+        params: { ...params, motiveId, reasonText },
+      };
+    }
+    return {
+      action: 'none',
+      speak: "Could you tell me the reason for the appointment first?",
+      params,
+    };
+  }
+
+  return { action, speak, params };
+}
+
 function normalizePatientName(value) {
   if (!value || typeof value !== 'string') return null;
   const cleaned = value
@@ -701,6 +761,20 @@ async function processTurn({
   let { speak, action = 'none', params = {}, intent } = parsed;
   let nextAgent = currentAgent;
   const updatedBookingReasonText = inferBookingReasonText(userText, params, bookingReasonText);
+  const guarded = applyBookingStateGuard({
+    currentAgent,
+    action,
+    speak,
+    params,
+    userText,
+    pendingSlots,
+    history,
+    bookingReasonText: updatedBookingReasonText,
+  });
+  ({ action, speak, params } = guarded);
+  parsed.action = action;
+  parsed.speak = speak;
+  parsed.params = params;
 
   console.log(`[Agent:${currentAgent}] intent="${intent}" action="${action}" speak="${speak?.slice(0, 60)}..."`);
 

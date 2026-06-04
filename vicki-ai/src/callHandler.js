@@ -31,6 +31,27 @@ function lookupBridgeFor(userText, currentAgent, pendingSlots) {
   return "Let me check that for you.";
 }
 
+function normalizePhoneForMatch(phoneNumber) {
+  const digits = String(phoneNumber || '').replace(/\D/g, '');
+  if (digits.startsWith('351') && digits.length === 12) return digits.slice(3);
+  return digits;
+}
+
+function forceUnknownCaller(callerNumber) {
+  const target = normalizePhoneForMatch(callerNumber);
+  if (!target) return false;
+  return (process.env.FORCE_UNKNOWN_CALLER_NUMBERS || '')
+    .split(',')
+    .map(normalizePhoneForMatch)
+    .filter(Boolean)
+    .some(n => n === target);
+}
+
+function suppressEarlySpeak(text, currentAgent, pendingSlots) {
+  if (currentAgent !== 'booking' || pendingSlots?.length) return false;
+  return /\bwhich one\b.*\b(morning|afternoon)\b|\bmorning or (?:the )?afternoon\b/i.test(text || '');
+}
+
 function clearTelnyxAudio(telnyxWs, reason = '') {
   if (telnyxWs?.readyState !== 1) return;
   telnyxWs.send(JSON.stringify({ event: 'clear' }));
@@ -394,6 +415,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
       const onSpeakReady = (earlyText) => {
         if (!speakStarted && isSpeaking) {
+          if (suppressEarlySpeak(earlyText, currentAgent, pendingSlots)) {
+            console.log(`[TTS] Early speak suppressed before slots: "${earlyText}"`);
+            return;
+          }
           speakStarted = true;
           speakToCaller(earlyText, () => { isSpeaking = false; currentAbort = null; bridgeDone(); });
         }
@@ -568,8 +593,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
             try {
               // Lookup patient + doctors in parallel, greet as soon as data is ready
               // No artificial delay — answer immediately
+              const forceUnknown = forceUnknownCaller(callerNumber);
+              if (forceUnknown) {
+                console.log(`[Newsoft] Forced unknown caller override active for ${callerNumber}`);
+              }
               const [patientResult, doctors, motives] = await Promise.all([
-                callerNumber ? newsoft.getPatientByPhone(callerNumber) : Promise.resolve(null),
+                callerNumber && !forceUnknown ? newsoft.getPatientByPhone(callerNumber) : Promise.resolve(null),
                 newsoft.getDoctors(),
                 newsoft.getMotives(),
               ]);
