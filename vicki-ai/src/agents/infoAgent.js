@@ -111,7 +111,8 @@ REGRAS:
   PASSO 2: Só desligas quando o paciente claramente termina:
     Gatilhos: "adeus", "tchau", "até logo", "até já", "obrigado/a", "era só isso", "mais nada",
     "foi tudo", "não preciso de mais nada", "tenha um bom dia",
-    "bye", "goodbye", "thanks", "thank you", "that's all", "nothing else", "no thanks".
+    "bye", "goodbye", "thanks", "thank you", "that's all", "nothing else", "no thanks",
+    "não, obrigado", "nada mais".
     ⚠️ NÃO desligues com "ok" / "está bem" / "claro" sozinhos — demasiado vagos.
   FRASE DE DESPEDIDA — SEMPRE usa uma frase explícita de encerramento:
     "Muito obrigada por ligar para o Instituto Vilas Boas — tenha um ótimo dia! Até logo!"

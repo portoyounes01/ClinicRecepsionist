@@ -147,7 +147,8 @@ CONSULTA JÁ EXISTENTE / CANCELAR / REMARCAR:
 DESPEDIDA — 2 PASSOS:
   Passo 1: Após responder → "Posso ajudar em mais alguma coisa?" (action: none — NÃO desligues)
   Passo 2: Gatilhos de fecho: "adeus", "até logo", "até já", "obrigado/a", "era só isso",
-    "mais nada", "foi tudo", "tenha um bom dia", "bye", "goodbye", "thanks", "that's all".
+    "mais nada", "foi tudo", "tenha um bom dia", "bye", "goodbye", "thanks", "that's all",
+    "não preciso de mais nada", "não, obrigado", "nada mais".
     ⚠️ "ok" / "está bem" / "claro" sozinhos NÃO são despedida.
   Frase: "Muito obrigada por ligar para o Instituto Vilas Boas — tenha um ótimo dia! Até logo!"
 
