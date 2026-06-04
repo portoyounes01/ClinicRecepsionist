@@ -373,18 +373,21 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       return;
     }
 
-    // Soniox sends token arrays; reconstruct text
-    // Types: 'non_final' (interim) | 'final' (complete utterance)
-    const tokens  = data.tokens || [];
-    const isFinal = data.type === 'final';
-    const text    = tokens.map(t => t.text).join('').trim();
+    // Soniox actual response schema:
+    // { tokens: [{text, is_final, confidence, start_ms, end_ms}], final_audio_proc_ms, total_audio_proc_ms }
+    // is_final is PER TOKEN — a message is "final" when ALL tokens have is_final=true
+    // End of stream: { tokens: [], finished: true }
 
-    // Debug: log raw type so we can confirm what Soniox actually sends
-    if (text) console.log(`[Soniox] type=${data.type} text="${text.slice(0, 60)}"`);
+    if (data.finished) return; // end-of-stream signal, ignore
 
+    const tokens    = data.tokens || [];
+    if (!tokens.length) return;
+
+    const isFinal   = tokens.every(t => t.is_final === true);
+    const text      = tokens.map(t => t.text).join('').trim();
     if (!text) return;
 
-    if (isFinal || data.type === 'non_final') lastSpeechTime = Date.now(); // reset silence watchdog
+    lastSpeechTime = Date.now(); // reset silence watchdog on any speech activity
 
     // ── Confidence filter — skip near-noise final transcripts ────────
     const confidence = tokens.length
@@ -399,7 +402,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     const transcript = text.replace(/\b(.{4,})\b(?:[.,!?]?\s+\1)+/gi, '$1');
     const wordCount  = transcript.split(/\s+/).filter(Boolean).length;
 
-    console.log(`[STT] ${isFinal ? 'FINAL' : 'partial'}: "${transcript}"${confidence < 0.75 && isFinal ? ` (conf:${confidence.toFixed(2)})` : ''}`);
+    console.log(`[STT] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}"${confidence < 0.75 && isFinal ? ` (conf:${confidence.toFixed(2)})` : ''} [final_ms=${data.final_audio_proc_ms ?? '?'}]`);
+
 
     // Barge-in: patient says 2+ words while Vicki speaks -> stop her.
     if (isSpeaking && currentAbort && wordCount >= 2) {
