@@ -697,18 +697,61 @@ async function executeAction(action, params, patient, callerNumber) {
           const lp = p.toLowerCase();
           if (lp === 'morning'  || lp === 'manhã' || lp === 'manha') return 'manhã';
           if (lp === 'afternoon'|| lp === 'tarde')                    return 'tarde';
-          return lp; // pass through as-is
+          return lp;
         };
         const wantedPeriod = normPeriod(params.chosenPeriod);
 
+        // Extract the specific time the AI/patient agreed on (e.g. "14h45", "14:45", "9h30")
+        // Try params.chosenTime first, then look for time pattern in recent speak/params
+        const extractTime = (str) => {
+          if (!str) return null;
+          // Match formats: "14h45", "14:45", "14h", "9h30", "09:30"
+          const m = String(str).match(/\b(\d{1,2})h(\d{2})?|(\d{1,2}):(\d{2})\b/);
+          if (!m) return null;
+          const hh = parseInt(m[1] || m[3]);
+          const mm = parseInt(m[2] || m[4] || '0');
+          return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+        };
+
+        // Gather candidate strings that may contain the specific time
+        const timeSource = [
+          params.chosenTime,
+          params.speak,
+          // Last AI assistant message in history (what Vicki actually said to the patient)
+          ...(history || []).slice(-4).filter(m => m.role === 'assistant').map(m => {
+            try { return JSON.parse(m.content)?.speak; } catch (_) { return m.content; }
+          }),
+        ].filter(Boolean).join(' ');
+
+        const wantedTime = extractTime(params.chosenTime) || extractTime(timeSource);
+
         chosenSlot =
-          // 1. Match by normalized period
+          // 1. Match by EXACT time (highest priority — prevents 14:00 vs 14:45 confusion)
+          (wantedTime && params._pendingSlots.find(s => {
+            const st = s.time?.slice(0,5);           // "14:45"
+            const dt = s.displayTime?.replace('h',':').replace(/(\d+):$/, '$10:00'); // "14h45" → "14:45"
+            return st === wantedTime || dt === wantedTime;
+          })) ||
+          // 2. Match by period + time proximity (pick closest to wanted time within period)
+          (wantedPeriod && wantedTime && (() => {
+            const sameperiod = params._pendingSlots.filter(s => normPeriod(s.period) === wantedPeriod);
+            if (!sameperiod.length) return null;
+            const wH = parseInt(wantedTime.split(':')[0]);
+            const wM = parseInt(wantedTime.split(':')[1]);
+            const wMin = wH * 60 + wM;
+            return sameperiod.sort((a, b) => {
+              const [ah, am] = (a.time || '00:00').split(':').map(Number);
+              const [bh, bm] = (b.time || '00:00').split(':').map(Number);
+              return Math.abs(ah*60+am - wMin) - Math.abs(bh*60+bm - wMin);
+            })[0];
+          })()) ||
+          // 3. Match by normalized period (first slot of that period)
           (wantedPeriod && params._pendingSlots.find(s => normPeriod(s.period) === wantedPeriod)) ||
-          // 2. Match by partial slotBase64 prefix (AI may truncate)
+          // 4. Match by partial slotBase64 prefix (AI may truncate)
           (params.slotBase64 && params._pendingSlots.find(s => s.slotBase64?.startsWith(params.slotBase64?.slice(0, 20)))) ||
-          // 3. Match by medicName if AI passed it
+          // 5. Match by medicName
           (params.medicName && params._pendingSlots.find(s => s.medicName?.toLowerCase().includes(params.medicName?.toLowerCase()))) ||
-          // 4. Last resort: first slot
+          // 6. Last resort: first slot
           params._pendingSlots[0];
 
         if (chosenSlot) resolvedBase64 = chosenSlot.slotBase64;
@@ -717,8 +760,10 @@ async function executeAction(action, params, patient, callerNumber) {
         console.log(`[Booking] Slot resolution:`);
         console.log(`  chosenPeriod (AI)  : ${params.chosenPeriod || '(none)'}`);
         console.log(`  wantedPeriod (norm): ${wantedPeriod || '(none)'}`);
-        console.log(`  slots available    : ${params._pendingSlots.map(s => `${s.period} ${s.medicName} ${s.time}`).join(' | ')}`);
-        console.log(`  chosen slot        : ${chosenSlot ? `${chosenSlot.period} ${chosenSlot.medicName} ${chosenSlot.time}` : 'NONE — fallback'}`);
+        console.log(`  wantedTime         : ${wantedTime || '(none)'}`);
+        console.log(`  slots available    : ${params._pendingSlots.map(s => `${s.period} ${s.medicName} ${s.time} (${s.displayTime})`).join(' | ')}`);
+        console.log(`  chosen slot        : ${chosenSlot ? `${chosenSlot.period} ${chosenSlot.medicName} ${chosenSlot.time} (${chosenSlot.displayTime})` : 'NONE — fallback'}`);
+
       }
 
       console.log(`[Booking] Patient: ${patientForBooking.patientName} (${patientForBooking.patientId})`);
