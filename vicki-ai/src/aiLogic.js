@@ -19,7 +19,11 @@ const appointmentsAgent = require('./agents/appointmentsAgent');
 const infoAgent         = require('./agents/infoAgent');
 const emergencyAgent    = require('./agents/emergencyAgent');
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const https   = require('https');
+const openai  = new OpenAI({
+  apiKey:     process.env.OPENAI_API_KEY,
+  httpAgent:  new https.Agent({ keepAlive: true }),
+});
 const { LOULE_DOCTOR_IDS } = bookingAgent;
 const LIVE_AGENT_MODEL = 'gpt-5.4-mini';
 

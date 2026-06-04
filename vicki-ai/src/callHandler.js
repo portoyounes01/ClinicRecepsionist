@@ -424,6 +424,25 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         }
       };
 
+      // ── Second filler — fires only if API is slow (>2.5s) ──────────────
+      // Plays a short patience phrase so the caller never hears dead air.
+      // Cancels itself the moment processTurn returns. No agent involved.
+      const PATIENCE_FILLERS = [
+        "Just a little longer...",
+        "Bear with me one more second...",
+        "Almost there...",
+      ];
+      let patienceTimer = null;
+      let patienceFired = false;
+      patienceTimer = setTimeout(() => {
+        if (!patienceFired && isSpeaking) {
+          patienceFired = true;
+          const filler = PATIENCE_FILLERS[Math.floor(Date.now() / 1000) % PATIENCE_FILLERS.length];
+          console.log(`[TTS] Patience filler: "${filler}"`);
+          speakToCaller(filler, () => {});
+        }
+      }, 2500);
+
       const result = await processTurn({
         history:        conversationHistory,
         patient,
@@ -441,6 +460,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         bookingReasonText,
         callerNumber,
       });
+      clearTimeout(patienceTimer); // cancel filler if API was fast
 
       conversationHistory = result.history;
       if (result.currentAgent   !== undefined) currentAgent   = result.currentAgent;
