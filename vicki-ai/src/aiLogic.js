@@ -409,18 +409,18 @@ function formatActionResponse(action, actionResult) {
       if (options.length === 1) {
         const s = options[0];
         const t = humanSlot(s.date + 'T' + s.time);
-        speak = `I have a slot ${t.dayName} at ${t.timeStr} with ${s.medicName} — does that work for you?`;
+        speak = `Tenho vaga ${t.dayName} às ${t.timeStr} com ${s.medicName} — assim está bem para si?`;
       } else {
         const [am, pm] = options;
         const amT = humanSlot(am.date + 'T' + am.time);
         const pmT = humanSlot(pm.date + 'T' + pm.time);
-        const day = amT.dayName === pmT.dayName ? amT.dayName : `${amT.dayName} or ${pmT.dayName}`;
+        const day = amT.dayName === pmT.dayName ? amT.dayName : `${amT.dayName} ou ${pmT.dayName}`;
 
         if (am.medicName === pm.medicName) {
-          // Same doctor — don't repeat the name twice
-          speak = `I have ${day} with ${am.medicName} — ${amT.timeStr} in the morning or ${pmT.timeStr} in the afternoon. Which suits you better?`;
+          // Mesmo médico — não repete o nome duas vezes
+          speak = `Tenho ${day} com ${am.medicName} — ${amT.timeStr} de manhã ou ${pmT.timeStr} de tarde. Qual lhe convém melhor?`;
         } else {
-          speak = `I have ${day} — ${amT.timeStr} with ${am.medicName}, or ${pmT.timeStr} with ${pm.medicName}. Which do you prefer?`;
+          speak = `Tenho ${day} — ${amT.timeStr} com ${am.medicName}, ou ${pmT.timeStr} com ${pm.medicName}. Qual prefere?`;
         }
       }
 
@@ -428,9 +428,9 @@ function formatActionResponse(action, actionResult) {
         speak,
         action: 'none',
         pendingSlots: slots,
-        // Store FULL slotBase64 so AI can copy it correctly — no truncation
+        // Contexto em pt-PT para o agente referenciar os slots correctamente
         _slotsContext: options.map((s, i) =>
-          `Option ${i+1} (${s.period}): ${humanSlot(s.date+'T'+s.time).dayName} at ${humanSlot(s.date+'T'+s.time).timeStr} in the ${s.period} with ${s.medicName}\nslotBase64=${s.slotBase64}`
+          `Opção ${i+1} (${s.period}): ${humanSlot(s.date+'T'+s.time).dayName} às ${humanSlot(s.date+'T'+s.time).timeStr} da ${s.period} com ${s.medicName}\nslotBase64=${s.slotBase64}`
         ).join('\n\n'),
       };
     }
@@ -438,12 +438,12 @@ function formatActionResponse(action, actionResult) {
     case 'get_appointments': {
       const appts = actionResult.appointments || [];
       if (!appts.length) {
-        return { speak: "You don't have any upcoming appointments with us at the moment.", action: 'none' };
+        return { speak: "Neste momento não tem nenhuma consulta agendada connosco.", action: 'none' };
       }
       const a = appts[0];
-      const more = appts.length > 1 ? ` You have ${appts.length} appointments in total.` : '';
+      const more = appts.length > 1 ? ` Tem ${appts.length} consultas no total.` : '';
       return {
-        speak: `Your next appointment is ${a.display}.${more} Is there anything you'd like to do with it?`,
+        speak: `A sua próxima consulta é ${a.display}.${more} Deseja fazer alguma alteração?`,
         action: 'none',
         pendingAppointments: appts,
         // Store appointmentIds in history so AI can reference them for cancel
@@ -827,7 +827,7 @@ async function processTurn({
       `[AI] JSON parse failed | model=${LIVE_AGENT_MODEL} agent=${currentAgent} ` +
       `error=${err.message} raw=${JSON.stringify(fullText.slice(0, 500))}`
     );
-    parsed = { speak: "Sorry, I didn't quite catch that — could you say it again?", action: 'none', intent: null };
+    parsed = { speak: "Desculpe, não percebi bem — pode repetir?", action: 'none', intent: null };
   }
 
   let { speak, action = 'none', params = {}, intent } = parsed;
@@ -981,7 +981,7 @@ async function processTurn({
       console.error(`[Agent:${currentAgent}] Action error:`, err.message);
       // On any API/booking error → transfer to human with a warm apology
       const tSpeak = transferSpeak(patient);
-      const errSpeak = `I'm really sorry about that — I wasn't able to complete that in our system. ${tSpeak}`;
+      const errSpeak = `Peço desculpa — não foi possível concluir a operação no nosso sistema. ${tSpeak}`;
       history.push({ role: 'assistant', content: JSON.stringify({ speak: errSpeak, action: 'transfer_to_human' }) });
       return { speak: errSpeak, action: 'transfer_to_human', history, currentAgent: 'human', bookingReasonText: updatedBookingReasonText };
     }
