@@ -400,39 +400,31 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       return;
     }
 
-    // ── Deduplicate repeated words (barge-in artifact) ───────────────
+    // ── Soniox sends interims every token — deduplicate logs ─────────
     const transcript = text.replace(/\b(.{4,})\b(?:[.,!?]?\s+\1)+/gi, '$1');
     const wordCount  = transcript.split(/\s+/).filter(Boolean).length;
 
-    console.log(`[STT] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}"${confidence < 0.75 && isFinal ? ` (conf:${confidence.toFixed(2)})` : ''} [final_ms=${data.final_audio_proc_ms ?? '?'}]`);
+    // Only log when text actually changes (suppress per-character spam)
+    if (transcript !== lastInterimText) {
+      console.log(`[STT] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}" [final_ms=${data.final_audio_proc_ms ?? '?'}]`);
+    }
 
-
-    // Barge-in: patient says 2+ words while Vicki speaks -> stop her.
+    // ── Barge-in: patient says 2+ words while Vicki speaks ───────────
     if (isSpeaking && currentAbort && wordCount >= 2) {
       console.log('[Barge-in] Patient interrupted — stopping Vicki');
       clearTimeout(processingTimer); processingTimer = null;
       currentAbort('barge-in'); currentAbort = null; isSpeaking = false;
-      pendingTranscript = '';
+      lastInterimText = ''; pendingTranscript = '';
     }
 
-    if (!isFinal) {
-      // Track the latest interim text — used as fallback if debounce fires
-      // while finals are still rolling in
-      lastInterimText = transcript;
-      return;
-    }
-
-    // While Vicki is speaking, ignore FINAL transcripts (only barge-in above)
     if (isSpeaking) return;
 
-    // Soniox sends finals in rolling chunks (~every 2s).
-    // Use the latest interim text (full sentence) not the chunk tail.
-    const finalText = lastInterimText || transcript;
-    pendingTranscript = finalText; // always replace with latest full text
-    lastInterimText = '';
+    // ── Silence-gap trigger (works for both interim and final) ────────
+    // Always update latest known text
+    lastInterimText = transcript;
+    pendingTranscript = transcript; // always the freshest full text
 
-    // ⚡ Debounce: 800ms — Soniox sends rolling finals every ~2s so we wait
-    // for a full silence gap before firing the AI pipeline.
+    // Reset debounce on every new token — fires 600ms after last word
     clearTimeout(processingTimer);
     processingTimer = setTimeout(async () => {
       const userText = pendingTranscript.trim();
@@ -629,7 +621,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       await speakNow('Sorry, could you repeat that?', () => { isSpeaking = false; currentAbort = null; });
       isSpeaking = false;
     }
-    }, 800); // end debounce timer — 800ms for Soniox rolling finals
+    }, 600); // 600ms silence gap — fires after patient stops talking
   }  // end handleSonioxMessage
 
   // ── Telnyx WebSocket ──────────────────────
