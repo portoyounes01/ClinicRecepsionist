@@ -270,7 +270,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     callEnding = true;
     console.log('[Watchdog] Max duration reached (15 min) — auto-hangup');
     speakToCaller(
-      "I'm so sorry, we've been connected for a while and I need to free the line. Please call us back if you need anything — goodbye!",
+      "Pedimos desculpa — a chamada está a demorar muito e preciso de libertar a linha. Por favor ligue novamente se precisar de ajuda — até logo!",
       () => {
         if (callSid) hangupCalls.add(callSid);
         try { ws.close(); } catch (_) {}
@@ -754,7 +754,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
     } catch (err) {
       console.error('[AI] Error:', err.message);
-      await speakNow('Sorry, could you repeat that?', () => { isSpeaking = false; currentAbort = null; });
+      await speakNow('Desculpe, não percebi bem — pode repetir?', () => { isSpeaking = false; currentAbort = null; });
       isSpeaking = false;
     }
     }  // end if (endToken)

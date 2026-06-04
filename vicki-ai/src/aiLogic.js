@@ -92,31 +92,31 @@ function buildTransferContext(fromAgent, userText, history, bookingReasonText, p
 // "2026-06-03T14:45:00" → "next Tuesday at quarter to three in the afternoon"
 // ─────────────────────────────────────────────
 function humanSlot(isoString) {
-  const date    = new Date(isoString);
-  const now     = new Date();
-  const today   = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const slotDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
-  const diffDays = Math.round((slotDay - today) / 86400000);
+  // IMPORTANT: Newsoft returns local Lisbon time (e.g. '2026-06-18T14:00:00') with NO timezone suffix.
+  // Using new Date() would treat it as UTC and add +1h offset. Parse manually to avoid this.
+  const [datePart, timePart] = isoString.split('T');
+  const [year, month, day]   = datePart.split('-').map(Number);
+  const [hh, mm]             = (timePart || '00:00').split(':').map(Number);
 
-  const weekday = date.toLocaleDateString('pt-PT', { weekday: 'long' });
+  // Build a local Date just for weekday/month name (day-of-week)
+  const date     = new Date(year, month - 1, day);
+  const now      = new Date();
+  const today    = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diffDays = Math.round((date - today) / 86400000);
+
+  const weekday   = date.toLocaleDateString('pt-PT', { weekday: 'long' });
   const monthName = date.toLocaleDateString('pt-PT', { month: 'long' });
 
   let dayName;
   if      (diffDays === 0) dayName = 'hoje';
   else if (diffDays === 1) dayName = 'amanhã';
   else if (diffDays <= 6)  dayName = `esta ${weekday}`;
-  else {
-    // 7+ dias — inclui SEMPRE a data real
-    dayName = `${weekday}, dia ${date.getDate()} de ${monthName}`;
-  }
+  else                     dayName = `${weekday}, dia ${day} de ${monthName}`;
 
-  const h   = date.getHours();
-  const m   = date.getMinutes();
-  const period = h < 12 ? 'manhã' : h < 18 ? 'tarde' : 'noite';
-  // Formato 24h pt-PT — ElevenLabs lê '14:30' naturalmente em português
-  const timeStr = m === 0
-    ? `${String(h).padStart(2,'0')}h`
-    : `${String(h).padStart(2,'0')}h${String(m).padStart(2,'0')}`;
+  const period  = hh < 12 ? 'manhã' : hh < 18 ? 'tarde' : 'noite';
+  const timeStr = mm === 0
+    ? `${String(hh).padStart(2,'0')}h`
+    : `${String(hh).padStart(2,'0')}h${String(mm).padStart(2,'0')}`;
 
   return { dayName, timeStr, period };
 }
