@@ -506,7 +506,7 @@ function formatActionResponse(action, actionResult) {
 // NEWSOFT API EXECUTOR
 // Runs the action chosen by the current agent.
 // ─────────────────────────────────────────────
-async function executeAction(action, params, patient, callerNumber) {
+async function executeAction(action, params, patient, callerNumber, history = []) {
   switch (action) {
 
     case 'check_slots': {
@@ -1281,7 +1281,7 @@ async function processTurn({
                 _bookingReasonText: updatedBookingReasonText,
               }
             : params;
-      const actionResult = await executeAction(action, enrichedParams, patient, callerNumber);
+      const actionResult = await executeAction(action, enrichedParams, patient, callerNumber, history);
       if (actionResult) {
         const formatted = formatActionResponse(action, actionResult);
         if (formatted) {
