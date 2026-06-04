@@ -6,8 +6,9 @@ const LOULE_DOCTOR_IDS = [1, 3, 11, 13, 25, 33, 36, 39];
 
 function buildPrompt(patient, clinicInfo, cachedDoctors, cachedMotives, memoryContext) {
   const patientCtx = patient
-    ? `Paciente: ${patient.patientName}. Médico habitual: ${patient.patientMedicName || 'não registado'}. (ID interno: ${patient.patientId} — NUNCA reveles ao paciente.)`
-    : `Novo paciente — número não registado. Podes completar a marcação: o sistema cria ou localiza o ficheiro antes de marcar.`;
+    ? `✅ PACIENTE IDENTIFICADO: ${patient.patientName} (ID:${patient.patientId}). NUNCA peças o nome — já está registado. Após confirmação → chama book_appointment IMEDIATAMENTE.`
+    : `Novo paciente — número não registado. Recolhe apenas o nome completo antes de marcar.`;
+
 
   const memoryBlock = memoryContext
     ? `\nHISTÓRICO (usa para personalizar — sugere médico/horário preferido):\n${memoryContext}\n`

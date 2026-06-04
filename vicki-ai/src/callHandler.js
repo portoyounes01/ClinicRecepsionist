@@ -541,24 +541,29 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
       // ── Speak the response ───────────────────────────────────────────
       if (result.actionFired && result.speak) {
-        // For result actions (book/cancel): the AI bridge phrase IS the completion message.
-        // Aborting it and speaking only the formatActionResponse avoids double-speak.
-        // For check_slots: bridge phrase is a loading message — let it finish first.
-        const isResultAction = ['book_appointment', 'cancel_appointment'].includes(result.actionFired);
-        if (speakStarted && isResultAction && currentAbort) {
-          currentAbort('action-result'); // abort bridge — bridgeDone() fires in finally, resolving bridgePromise
+        // check_slots: bridge was a loading phrase — abort it immediately and speak slots.
+        // book/cancel: abort bridge and speak the API result.
+        // Both cases: always stop whatever was playing and speak the real result.
+        const isSlotResult = result.actionFired === 'check_slots';
+        if (speakStarted && currentAbort) {
+          currentAbort('action-result');
           currentAbort = null;
         }
-        if (speakStarted) await bridgePromise;
+        // For barge-in scenarios: bridgePromise may already be resolved.
+        // Use race with a 300ms timeout so we never hang waiting for bridge.
+        if (speakStarted) {
+          await Promise.race([
+            bridgePromise,
+            new Promise(r => setTimeout(r, 300)),
+          ]);
+        }
         // Now speak the definitive API result (slots, booking/cancel confirmation, etc.)
         isSpeaking = true;
         await speakNow(result.speak, () => { isSpeaking = false; currentAbort = null; });
       } else if (result.action === 'transfer_to_human' && result.speak) {
         // TRANSFER: always abort the early AI speak and replay with the mandatory hold message.
-        // The early speak (onSpeakReady) may have fired with whatever the AI said —
-        // we must override it so the patient hears the proper professional hold phrase.
         if (speakStarted && currentAbort) {
-          currentAbort('transfer'); // stop whatever was already playing
+          currentAbort('transfer');
           currentAbort = null;
         }
         if (speakStarted) await bridgePromise;
