@@ -74,6 +74,56 @@ function slotDay(isoString) {
   return humanSlot(isoString).dayName;
 }
 
+function addDaysIso(dateString, days) {
+  return new Date(new Date(dateString + 'T00:00:00').getTime() + days * 86400000)
+    .toISOString()
+    .split('T')[0];
+}
+
+function inferSlotSearchDirection(userText) {
+  const text = (userText || '').toLowerCase();
+  if (/\b(before|earlier|sooner|closer)\b/.test(text)) return 'earlier';
+  return 'later';
+}
+
+function explicitBeforeDateTo(userText, referenceDate) {
+  const text = (userText || '').toLowerCase();
+  if (!/\bbefore\b/.test(text)) return null;
+
+  const words = {
+    one: 1, first: 1, two: 2, second: 2, three: 3, third: 3, four: 4, fourth: 4,
+    five: 5, fifth: 5, six: 6, sixth: 6, seven: 7, seventh: 7, eight: 8, eighth: 8,
+    nine: 9, ninth: 9, ten: 10, tenth: 10, eleven: 11, eleventh: 11, twelve: 12,
+    twelfth: 12, thirteen: 13, thirteenth: 13, fourteen: 14, fourteenth: 14,
+    fifteen: 15, fifteenth: 15, sixteen: 16, sixteenth: 16, seventeen: 17,
+    seventeenth: 17, eighteen: 18, eighteenth: 18, nineteen: 19, nineteenth: 19,
+    twenty: 20, twentieth: 20, 'twenty one': 21, 'twenty first': 21,
+    'twenty two': 22, 'twenty second': 22, 'twenty three': 23, 'twenty third': 23,
+    'twenty four': 24, 'twenty fourth': 24, 'twenty five': 25, 'twenty fifth': 25,
+    'twenty six': 26, 'twenty sixth': 26, 'twenty seven': 27, 'twenty seventh': 27,
+    'twenty eight': 28, 'twenty eighth': 28, 'twenty nine': 29, 'twenty ninth': 29,
+    thirty: 30, thirtieth: 30, 'thirty one': 31, 'thirty first': 31,
+  };
+
+  let day = null;
+  const numeric = text.match(/\bbefore\s+(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\b/);
+  if (numeric) {
+    day = parseInt(numeric[1], 10);
+  } else {
+    const match = Object.keys(words)
+      .sort((a, b) => b.length - a.length)
+      .find(w => new RegExp(`\\bbefore\\s+(?:the\\s+)?${w}\\b`).test(text));
+    if (match) day = words[match];
+  }
+
+  if (!day || day < 1 || day > 31) return null;
+
+  const ref = new Date((referenceDate || new Date().toISOString().split('T')[0]) + 'T00:00:00');
+  const target = new Date(ref.getFullYear(), ref.getMonth(), day);
+  if (Number.isNaN(target.getTime())) return null;
+  return addDaysIso(target.toISOString().split('T')[0], -1);
+}
+
 // ─────────────────────────────────────────────
 // PROGRAMMATIC RESPONSE FORMATTER
 // Converts raw Newsoft API data into spoken text.
@@ -85,8 +135,14 @@ function formatActionResponse(action, actionResult) {
     case 'check_slots': {
       const slots = actionResult.slots || [];
       if (!slots.length) {
+        if (actionResult.searchDirection === 'earlier') {
+          return {
+            speak: "I don't see anything earlier than that right now. The last slot I offered is still the earliest I can find. Would you like that one?",
+            action: 'none',
+          };
+        }
         return {
-          speak: "I'm sorry, there are no free slots with that doctor in the next 6 weeks. Would you like me to check a different doctor?",
+          speak: "I'm sorry, there are no free slots with that doctor in the next 4 weeks. Would you like me to check a different doctor?",
           action: 'none',
         };
       }
@@ -176,23 +232,31 @@ async function executeAction(action, params, patient) {
     case 'check_slots': {
       const today    = new Date().toISOString().split('T')[0];
       const maxDate  = new Date(Date.now() + 28 * 86400000).toISOString().split('T')[0];
+      const searchDirection = params._slotSearchDirection || 'later';
       const rawMotive = params.motiveId;
       const motiveId  = rawMotive && rawMotive !== 'undefined' && rawMotive !== 'null'
         ? rawMotive : null;
       const medicId   = params.medicId && params.medicId !== 'undefined' && params.medicId !== 'null'
         ? params.medicId : null;
 
-      // If patient declined a slot, start searching from the day AFTER that date
-      const dateFrom = params._lastOfferedDate
-        ? new Date(new Date(params._lastOfferedDate + 'T00:00:00').getTime() + 86400000).toISOString().split('T')[0]
-        : today;
+      let dateFrom = today;
+      let dateTo   = maxDate;
+
+      if (searchDirection === 'earlier') {
+        dateTo = params._explicitDateTo
+          || (params._lastOfferedDate ? addDaysIso(params._lastOfferedDate, -1) : maxDate);
+        if (dateTo < dateFrom) return { slots: [], searchDirection, dateFrom, dateTo };
+      } else if (params._lastOfferedDate) {
+        dateFrom = addDaysIso(params._lastOfferedDate, 1);
+      }
+
       const raw = await newsoft.getAvailableSlots({
         medicId,
         motiveId,
         dateFrom,
-        dateTo:   maxDate,
+        dateTo,
       });
-      if (!raw.length) return { slots: [] };
+      if (!raw.length) return { slots: [], searchDirection, dateFrom, dateTo };
 
       // Pick exactly 1 morning (before 13:00) and 1 afternoon/evening (≥13:00)
       // so Vicki always offers just 2 clear choices, never a long list
@@ -258,7 +322,7 @@ async function executeAction(action, params, patient) {
       const lastOfferedDate = slots.length > 0
         ? slots.reduce((max, s) => s.date > max ? s.date : max, slots[0].date)
         : null;
-      return { slots: slots.length ? slots : [toSlot(raw[0])], lastOfferedDate };
+      return { slots: slots.length ? slots : [toSlot(raw[0])], lastOfferedDate, searchDirection, dateFrom, dateTo };
     }
 
     case 'get_appointments': {
@@ -568,7 +632,12 @@ async function processTurn({
         : action === 'cancel_appointment'
           ? { ...params, _pendingAppts: pendingAppts }
           : action === 'check_slots'
-            ? { ...params, _lastOfferedDate: lastOfferedDate }
+            ? {
+                ...params,
+                _lastOfferedDate: lastOfferedDate,
+                _slotSearchDirection: params.searchDirection || inferSlotSearchDirection(userText),
+                _explicitDateTo: explicitBeforeDateTo(userText, lastOfferedDate),
+              }
             : params;
       const actionResult = await executeAction(action, enrichedParams, patient);
       if (actionResult) {

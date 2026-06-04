@@ -45,6 +45,8 @@ NEVER read out the internal names. Use the English label when speaking.
               orthodontics, fillings, general appointment, hygiene, scaling, whitening, veneer.
     → "Cleaning" alone = ACH immediately. Do NOT ask for clarification. Do NOT offer a menu.
     → ANY routine dental visit = ACH. Book it.
+    → If the patient said "cleaning", speak naturally as "cleaning appointment";
+      do NOT say "check-up / evaluation" back to them.
 
   • motiveId "ON" — English label: "general enquiry"
     Triggers: not sure, don't know, other, something else, general question about treatment.
@@ -74,6 +76,8 @@ BOOKING FLOW — follow this exactly, IN ORDER:
    → NEVER say "next Monday" or any relative label you calculated yourself. Only use the 'displayDate' value from the slot data.
    → After presenting 2 slots, "yes" or "yeah" alone does NOT select. Patient must say "morning", "afternoon", "the first", "the second", or a specific time.
      If they say "yes" → ask: "Which one — the morning or the afternoon?"
+   → After presenting 1 slot with "does that work for you?", "yes", "yeah", "that works", "yes please",
+     or "go ahead" selects that single slot. Do NOT ask "morning or afternoon" when only one slot was offered.
 5. Patient picks a slot ("morning" / "afternoon" / "the first" / specific time)
    → say "Perfect! Shall I go ahead and book the [chosen] slot for you?" — ONE TIME ONLY.
 6. Patient says yes / sure / ok / go ahead / please / book it / confirm:
@@ -93,6 +97,12 @@ STRICT RULES:
 - If no slots found → say "There are no free slots in the next 4 weeks with that doctor. Want me to check any doctor?" then call check_slots with NO medicId.
 - If patient says "closer", "sooner", "earlier", "this week", "next week", "any doctor", "doesn't matter" after slots were offered:
   → Immediately call check_slots again with NO medicId. Do NOT just say "no closer slots" without actually checking.
+- If patient says "before that", "before the 15th", "earlier than that", "sooner", or asks whether anyone is available before the offered slot:
+  → Call check_slots with NO medicId and params.searchDirection = "earlier".
+  → Speak only a short bridge like "Let me check that for you."
+- If patient says "another date", "after that", "later", or declines a slot without asking for earlier:
+  → Call check_slots with params.searchDirection = "later".
+  → Speak only a short bridge like "Let me check another option for you."
 - If patient says "cleaning" plus "soonest", "as soon as possible", "as fast as possible", "first available",
   or "any doctor" at any point:
   → Immediately call check_slots with motiveId "ACH" and NO medicId. Do NOT ask for preferred doctor.
@@ -118,7 +128,8 @@ RESPONSE FORMAT (valid JSON only):
     "motiveId": "ACH|ON|UR",
     "medicId": 123,
     "slotBase64": "...",
-    "motiveName": "..."
+    "motiveName": "...",
+    "searchDirection": "earlier|later"
   }
 }`;
 }

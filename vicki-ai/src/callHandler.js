@@ -22,6 +22,15 @@ const CLINIC_INFO = {
   hours:    process.env.CLINIC_HOURS,
 };
 
+function lookupBridgeFor(userText, currentAgent, pendingSlots) {
+  if (currentAgent !== 'booking' || !pendingSlots?.length) return null;
+  const text = (userText || '').toLowerCase();
+  const isLookupFollowup =
+    /\b(before|earlier|sooner|closer|another date|different date|anyone|any doctor|first available)\b/.test(text);
+  if (!isLookupFollowup) return null;
+  return "Let me check that for you.";
+}
+
 // ─────────────────────────────────────────────
 // SPEAK — stream ElevenLabs audio to Telnyx
 // ─────────────────────────────────────────────
@@ -261,9 +270,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     const wordCount = transcript.split(/\s+/).filter(Boolean).length;
     console.log(`[STT] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}"${confidence < 0.75 && isFinal ? ` (conf:${confidence.toFixed(2)})` : ''}`);
 
-    // Barge-in: patient says 2+ words while Vicki speaks → stop her
-    // 2 words avoids false triggers from noise/echo, still catches "no", "wait", "stop"
-    if (isSpeaking && currentAbort && wordCount >= 2) {
+    // Barge-in: patient says 3+ words while Vicki speaks → stop her
+    // 3 words avoids false triggers from short noise/echo while still catching real interruptions.
+    if (isSpeaking && currentAbort && wordCount >= 3) {
       console.log('[Barge-in] Patient interrupted — stopping Vicki');
       clearTimeout(processingTimer); processingTimer = null;
       currentAbort(); currentAbort = null; isSpeaking = false;
@@ -295,6 +304,15 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       let speakStarted    = false;
       let bridgeDone      = null;
       const bridgePromise = new Promise(r => { bridgeDone = r; });
+
+      const immediateBridge = lookupBridgeFor(userText, currentAgent, pendingSlots);
+      if (immediateBridge) {
+        speakStarted = true;
+        speak(immediateBridge, ws,
+          () => { isSpeaking = false; currentAbort = null; bridgeDone(); },
+          (fn) => { currentAbort = fn; }
+        );
+      }
 
       const onSpeakReady = (earlyText) => {
         if (!speakStarted && isSpeaking) {
