@@ -277,6 +277,26 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
   const reasonText = params.reasonText || bookingReasonText;
   const motiveId = params.motiveId || inferMotiveIdFromReasonText(reasonText);
 
+  // ── HARD BLOCK: check_slots requires a motiveId ─────────────────────────────
+  // If the AI tries to search slots before knowing the reason, intercept it
+  // and force Vicki to ask for the reason first. No exceptions.
+  if (action === 'check_slots' && !motiveId) {
+    console.warn('[Guard] check_slots blocked — no motiveId. Forcing reason question.');
+    return {
+      action: 'none',
+      speak: speak?.toLowerCase().includes('reason') || speak?.toLowerCase().includes('visit')
+        ? speak  // AI already asked — keep it
+        : "Before I check availability, could you tell me the reason for your visit?",
+      params,
+    };
+  }
+
+  // ── If motiveId was inferred from context, inject it back into params ────────
+  if (action === 'check_slots' && motiveId && !params.motiveId) {
+    console.log(`[Guard] motiveId injected from context: "${motiveId}" (reason: "${reasonText}")`);
+    return { action, speak, params: { ...params, motiveId, reasonText } };
+  }
+
   if (action === 'none' && askedDoctorPreference && isAffirmationOnly(userText) && motiveId) {
     return {
       action: 'check_slots',
