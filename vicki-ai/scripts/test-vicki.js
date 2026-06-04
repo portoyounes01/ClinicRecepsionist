@@ -51,7 +51,7 @@ const KNOWN_PATIENT = {
   patientId:       57125,
   patientName:     'Younes Habibi',
   patientMedicName:'Dr. Hermes',
-  phone:           '+351923124786',
+  phone:           '+351000000000',
 };
 
 const UNKNOWN_PATIENT = null; // unknown caller
