@@ -1067,6 +1067,31 @@ async function processTurn({
   parsed.speak = speak;
   parsed.params = params;
 
+  // ── HARD GUARD: loop detection → transfer to human after 3 repeats ──────────
+  // If Vicki repeats the exact same message 3+ times, she's stuck and can't
+  // understand the patient. Transfer the call instead of looping forever.
+  if (action === 'none' && speak) {
+    const speakNorm = (speak || '').trim().toLowerCase().slice(0, 80);
+    const recentAssistant = (history || []).slice(-8)
+      .filter(m => m.role === 'assistant')
+      .map(m => {
+        try {
+          const p = JSON.parse(m.content);
+          return (p.speak || '').trim().toLowerCase().slice(0, 80);
+        } catch (_) { return ''; }
+      })
+      .filter(Boolean);
+
+    const repeatCount = recentAssistant.filter(s => s === speakNorm).length;
+    if (repeatCount >= 2) {  // current + 2 in history = 3 total
+      console.log(`[Guard] LOOP DETECTED — Vicki repeated "${speakNorm.slice(0, 50)}..." ${repeatCount + 1} times. Transferring to human.`);
+      action = 'transfer_to_human';
+      speak = 'Peço desculpa — parece que não estou a conseguir ajudá-lo/a como deve ser. Vou passá-lo/a para um colega que poderá ajudar melhor.';
+      parsed.action = action;
+      parsed.speak = speak;
+    }
+  }
+
   // ── HARD GUARD: force book_appointment if AI skipped the API call ────────────
   // Catches ALL cases where AI confirmed booking but never called book_appointment:
   //   - action='none'   → AI spoke "Está tudo tratado!" without booking
