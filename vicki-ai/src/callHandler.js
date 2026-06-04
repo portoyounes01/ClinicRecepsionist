@@ -211,6 +211,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let sonioxOpen          = false;
   let sonioxWs            = null;
   let pendingTranscript   = '';
+  let lastInterimText     = '';   // latest Soniox interim — used to recover full sentence from rolling finals
+
   let processingTimer     = null;
   let pendingSlots        = [];
   let pendingAppts        = [];
@@ -413,15 +415,24 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       pendingTranscript = '';
     }
 
-    if (!isFinal) return;
+    if (!isFinal) {
+      // Track the latest interim text — used as fallback if debounce fires
+      // while finals are still rolling in
+      lastInterimText = transcript;
+      return;
+    }
 
     // While Vicki is speaking, ignore FINAL transcripts (only barge-in above)
     if (isSpeaking) return;
 
-    // Accumulate this FINAL into the pending buffer
-    pendingTranscript += (pendingTranscript ? ' ' : '') + transcript;
+    // Soniox sends finals in rolling chunks (~every 2s).
+    // Use the latest interim text (full sentence) not the chunk tail.
+    const finalText = lastInterimText || transcript;
+    pendingTranscript = finalText; // always replace with latest full text
+    lastInterimText = '';
 
-    // ⚡ Debounce: wait 150ms — still merges fast split utterances
+    // ⚡ Debounce: 800ms — Soniox sends rolling finals every ~2s so we wait
+    // for a full silence gap before firing the AI pipeline.
     clearTimeout(processingTimer);
     processingTimer = setTimeout(async () => {
       const userText = pendingTranscript.trim();
@@ -618,7 +629,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       await speakNow('Sorry, could you repeat that?', () => { isSpeaking = false; currentAbort = null; });
       isSpeaking = false;
     }
-    }, 150); // end debounce timer
+    }, 800); // end debounce timer — 800ms for Soniox rolling finals
   }  // end handleSonioxMessage
 
   // ── Telnyx WebSocket ──────────────────────
