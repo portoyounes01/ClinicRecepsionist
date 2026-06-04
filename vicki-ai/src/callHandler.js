@@ -374,12 +374,17 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     }
 
     // Soniox sends token arrays; reconstruct text
+    // Types: 'non_final' (interim) | 'final' (complete utterance)
     const tokens  = data.tokens || [];
-    const isFinal = data.type === 'final';            // 'partial' | 'final'
+    const isFinal = data.type === 'final';
     const text    = tokens.map(t => t.text).join('').trim();
+
+    // Debug: log raw type so we can confirm what Soniox actually sends
+    if (text) console.log(`[Soniox] type=${data.type} text="${text.slice(0, 60)}"`);
+
     if (!text) return;
 
-    if (isFinal) lastSpeechTime = Date.now(); // reset silence watchdog
+    if (isFinal || data.type === 'non_final') lastSpeechTime = Date.now(); // reset silence watchdog
 
     // ── Confidence filter — skip near-noise final transcripts ────────
     const confidence = tokens.length
