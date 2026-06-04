@@ -701,8 +701,9 @@ async function executeAction(action, params, patient, callerNumber, history = []
         };
         const wantedPeriod = normPeriod(params.chosenPeriod);
 
-        // Extract the specific time the AI/patient agreed on (e.g. "14h45", "14:45", "9h30")
-        // Try params.chosenTime first, then look for time pattern in recent speak/params
+        // Extract the specific time the patient explicitly requested (e.g. "14h45", "14:45", "9h30")
+        // ONLY read from patient (user) messages — NOT from Vicki's slot-listing message,
+        // which mentions multiple times and would cause false matches (e.g. "11h ou 14h" → picks 11h wrongly).
         const extractTime = (str) => {
           if (!str) return null;
           // Match formats: "14h45", "14:45", "14h", "9h30", "09:30"
@@ -713,26 +714,45 @@ async function executeAction(action, params, patient, callerNumber, history = []
           return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
         };
 
-        // Gather candidate strings that may contain the specific time
-        const timeSource = [
+        // Only use patient (user) messages for time extraction — Vicki's messages list multiple
+        // times and would cause wrong matches (e.g. "Tenho 11h de manhã ou 14h de tarde" → "11:00")
+        const patientTimeSource = [
           params.chosenTime,
-          params.speak,
-          // Last AI assistant message in history (what Vicki actually said to the patient)
-          ...(history || []).slice(-4).filter(m => m.role === 'assistant').map(m => {
-            try { return JSON.parse(m.content)?.speak; } catch (_) { return m.content; }
-          }),
+          // Recent patient turns only (role=user, not assistant)
+          ...(history || []).slice(-6).filter(m => m.role === 'user').map(m => m.content || ''),
         ].filter(Boolean).join(' ');
 
-        const wantedTime = extractTime(params.chosenTime) || extractTime(timeSource);
+        let wantedTime = extractTime(params.chosenTime) || extractTime(patientTimeSource) || null;
+
+        // If we have BOTH a wantedPeriod and a wantedTime, make sure they're consistent.
+        // Example: patient said "a da tarde" (tarde), wantedTime extracted as "11:00" from context.
+        // If wantedTime doesn't match any slot in wantedPeriod → discard wantedTime, trust period.
+        if (wantedTime && wantedPeriod) {
+          const timeMatchesPeriod = params._pendingSlots.some(s =>
+            normPeriod(s.period) === wantedPeriod &&
+            (s.time?.slice(0,5) === wantedTime || s.displayTime?.replace('h',':').replace(/(\d+):$/, '$10:00') === wantedTime)
+          );
+          if (!timeMatchesPeriod) {
+            console.log(`[Booking] wantedTime ${wantedTime} has no match in period ${wantedPeriod} — discarding time, trusting period`);
+            wantedTime = null;
+          }
+        }
 
         chosenSlot =
-          // 1. Match by EXACT time (highest priority — prevents 14:00 vs 14:45 confusion)
-          (wantedTime && params._pendingSlots.find(s => {
-            const st = s.time?.slice(0,5);           // "14:45"
-            const dt = s.displayTime?.replace('h',':').replace(/(\d+):$/, '$10:00'); // "14h45" → "14:45"
+          // 1. Match by EXACT time within correct period (prevents 14:00 vs 14:45 confusion)
+          (wantedTime && wantedPeriod && params._pendingSlots.find(s => {
+            if (normPeriod(s.period) !== wantedPeriod) return false;
+            const st = s.time?.slice(0,5);
+            const dt = s.displayTime?.replace('h',':').replace(/(\d+):$/, '$10:00');
             return st === wantedTime || dt === wantedTime;
           })) ||
-          // 2. Match by period + time proximity (pick closest to wanted time within period)
+          // 2. Match by EXACT time alone (when no period conflict)
+          (wantedTime && params._pendingSlots.find(s => {
+            const st = s.time?.slice(0,5);
+            const dt = s.displayTime?.replace('h',':').replace(/(\d+):$/, '$10:00');
+            return st === wantedTime || dt === wantedTime;
+          })) ||
+          // 3. Match by period + time proximity (pick closest to wanted time within period)
           (wantedPeriod && wantedTime && (() => {
             const sameperiod = params._pendingSlots.filter(s => normPeriod(s.period) === wantedPeriod);
             if (!sameperiod.length) return null;
@@ -745,14 +765,15 @@ async function executeAction(action, params, patient, callerNumber, history = []
               return Math.abs(ah*60+am - wMin) - Math.abs(bh*60+bm - wMin);
             })[0];
           })()) ||
-          // 3. Match by normalized period (first slot of that period)
+          // 4. Match by normalized period alone
           (wantedPeriod && params._pendingSlots.find(s => normPeriod(s.period) === wantedPeriod)) ||
-          // 4. Match by partial slotBase64 prefix (AI may truncate)
+          // 5. Match by partial slotBase64 prefix (AI may truncate)
           (params.slotBase64 && params._pendingSlots.find(s => s.slotBase64?.startsWith(params.slotBase64?.slice(0, 20)))) ||
-          // 5. Match by medicName
+          // 6. Match by medicName
           (params.medicName && params._pendingSlots.find(s => s.medicName?.toLowerCase().includes(params.medicName?.toLowerCase()))) ||
-          // 6. Last resort: first slot
+          // 7. Last resort: first slot
           params._pendingSlots[0];
+
 
         if (chosenSlot) resolvedBase64 = chosenSlot.slotBase64;
 
