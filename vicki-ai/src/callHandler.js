@@ -218,6 +218,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let pendingAppts        = [];
   let lastOfferedDate     = null;   // date of last slot shown — next search skips past it
   let bookingReasonText   = null;
+  let returnToAgent       = null;   // agent to resume after info/insurance detour
+  let returnContext       = {};     // saved pendingSlots + bookingReason for resume
+
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
   let callEnding          = false;      // prevents double-hangup
@@ -464,9 +467,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // Plays a short patience phrase so the caller never hears dead air.
       // Cancels itself the moment processTurn returns. No agent involved.
       const PATIENCE_FILLERS = [
-        "Just a little longer...",
-        "Bear with me one more second...",
-        "Almost there...",
+        "Só mais um momento...",
+        "Já já...",
+        "Quase pronto...",
       ];
       let patienceTimer = null;
       let patienceFired = false;
@@ -495,6 +498,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         lastOfferedDate,
         bookingReasonText,
         callerNumber,
+        returnToAgent,
+        returnContext,
       });
       clearTimeout(patienceTimer); // cancel filler if API was fast
 
@@ -505,6 +510,15 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       if (result.pendingAppts   && result.pendingAppts.length)  pendingAppts  = result.pendingAppts;
       if (result.lastOfferedDate !== undefined) lastOfferedDate = result.lastOfferedDate;
       if (result.bookingReasonText !== undefined) bookingReasonText = result.bookingReasonText;
+      // Resume context: when returning from info/emergency back to booking, restore slots
+      if (result.returnToAgent) {
+        returnToAgent  = result.returnToAgent;
+        returnContext  = result.returnContext || {};
+      }
+      if (result.clearReturn) {
+        returnToAgent  = null;
+        returnContext  = {};
+      }
       if (result.patient?.patientId) {
         patient = result.patient;
         patientMemory = getPatientMemory(patient.patientId);

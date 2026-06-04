@@ -760,9 +760,11 @@ async function processTurn({
   pendingSlots   = [],
   pendingAppts   = [],
   patientMemory  = null,
-  lastOfferedDate = null,   // date of last slot offered — skip past it on next search
+  lastOfferedDate = null,
   bookingReasonText = null,
   callerNumber = null,
+  returnToAgent = null,   // agent to return to after a detour (e.g. info → booking)
+  returnContext = {},     // saved state: { pendingSlots, bookingReasonText, lastOfferedDate }
 }) {
   history.push({ role: 'user', content: userText });
 
@@ -924,7 +926,62 @@ async function processTurn({
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
     history.push({ role: 'system', content: ctx });
     console.log(`[Agent] Silent transfer: ${currentAgent} → ${targetAgent}`);
-    return { speak, action: 'none', history, currentAgent: targetAgent, bookingReasonText: updatedBookingReasonText };
+
+    // ── SAVE return context when leaving booking mid-flow ──────────────────────────────
+    // When booking asks about price or insurance and transfers to info/human,
+    // we save returnToAgent='booking' so after the detour we can resume
+    // with all the slot/reason context intact.
+    let newReturnToAgent = returnToAgent;
+    let newReturnContext = returnContext;
+    if (currentAgent === 'booking' && (targetAgent === 'info' || targetAgent === 'human')) {
+      newReturnToAgent = 'booking';
+      newReturnContext = {
+        pendingSlots:     pendingSlots,
+        bookingReasonText: updatedBookingReasonText,
+        lastOfferedDate:  lastOfferedDate,
+      };
+      console.log(`[Agent] Saved return context: will resume booking after ${targetAgent} detour`);
+    }
+
+    // ── RESTORE saved context when returning to booking ──────────────────────────────
+    // Info agent told the patient about pricing and now transfers back to booking.
+    // We restore the saved slots/reason so booking can offer them immediately.
+    let restoredSlots = pendingSlots;
+    let restoredReason = updatedBookingReasonText;
+    let restoredLastDate = lastOfferedDate;
+    let clearReturn = false;
+    if (targetAgent === 'booking' && returnToAgent === 'booking' && returnContext) {
+      restoredSlots     = returnContext.pendingSlots     || pendingSlots;
+      restoredReason    = returnContext.bookingReasonText || updatedBookingReasonText;
+      restoredLastDate  = returnContext.lastOfferedDate  || lastOfferedDate;
+      clearReturn = true;
+      // Inject a system message reminding the booking agent of the open slot offer
+      if (restoredSlots?.length) {
+        const slotSummary = restoredSlots
+          .map(s => `${s.displayDate || s.date} às ${s.displayTime || s.time} com ${s.medicName}`)
+          .join(', ');
+        history.push({ role: 'system', content:
+          `[RETOMA DA MARCAÇÃO] O paciente estava a marcar uma consulta. ` +
+          `Slots já oferecidos: ${slotSummary}. ` +
+          `Motivo: ${restoredReason || 'não especificado'}. ` +
+          `Retoma naturalmente sem mencionar a transferência — pergunta qual slot prefere.`
+        });
+      }
+      console.log(`[Agent] Restored booking context with ${restoredSlots?.length || 0} slots`);
+    }
+
+    return {
+      speak,
+      action: 'none',
+      history,
+      currentAgent:     targetAgent,
+      bookingReasonText: restoredReason,
+      pendingSlots:     restoredSlots,
+      lastOfferedDate:  restoredLastDate,
+      returnToAgent:    clearReturn ? null    : newReturnToAgent,
+      returnContext:    clearReturn ? {}       : newReturnContext,
+      clearReturn,
+    };
   }
 
   if (action === 'hangup') {
@@ -957,7 +1014,7 @@ async function processTurn({
           // If slots were returned, inject a system context message so the
           // booking agent knows ALL options without re-calling check_slots
           if (formatted._slotsContext) {
-            history.push({ role: 'system', content: `Available slots found:\n${formatted._slotsContext}\n\nUse the correct slotBase64 when the patient confirms a specific option.` });
+            history.push({ role: 'system', content: `Slots disponíveis encontrados:\n${formatted._slotsContext}\n\nUsa o slotBase64 correto quando o paciente confirmar uma opção.` });
           }
           if (formatted._appointmentsContext) {
             history.push({ role: 'system', content: `Patient appointments:\n${formatted._appointmentsContext}\n\nUse the [ref:ID] values server-side only for cancel_appointment. Never reveal IDs to the patient.` });
