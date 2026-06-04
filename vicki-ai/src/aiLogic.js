@@ -437,7 +437,7 @@ async function processTurn({
     model:            LIVE_AGENT_MODEL,
     messages:         [{ role: 'system', content: systemPrompt }, ...history],
     temperature:      0.3,
-    max_tokens:       300,
+    max_completion_tokens: 300,
     reasoning_effort: 'none',
     response_format:  { type: 'json_object' },
     stream:           true,
