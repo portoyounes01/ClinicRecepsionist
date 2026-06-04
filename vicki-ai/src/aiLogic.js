@@ -21,6 +21,7 @@ const emergencyAgent    = require('./agents/emergencyAgent');
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const { LOULE_DOCTOR_IDS } = bookingAgent;
+const LIVE_AGENT_MODEL = 'gpt-5.4-mini';
 
 // ─────────────────────────────────────────────
 // HUMAN DATE/TIME FORMATTER
@@ -424,19 +425,30 @@ async function processTurn({
 
   const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory);
 
+  const modelStart = Date.now();
+  let firstChunkAt = null;
+  let speakReadyAt = null;
+  let finishReason = null;
+
+  console.log(`[AI] OpenAI request | model=${LIVE_AGENT_MODEL} agent=${currentAgent} history=${history.length}`);
+
   // ── Stream GPT response — extract speak ASAP, start TTS before GPT finishes ──
   const stream = await openai.chat.completions.create({
-    model:       'gpt-5.4-mini',
-    messages:    [{ role: 'system', content: systemPrompt }, ...history],
-    temperature: 0.3,
-    max_tokens:  300,
-    stream:      true,
+    model:            LIVE_AGENT_MODEL,
+    messages:         [{ role: 'system', content: systemPrompt }, ...history],
+    temperature:      0.3,
+    max_tokens:       300,
+    reasoning_effort: 'none',
+    response_format:  { type: 'json_object' },
+    stream:           true,
   });
 
   let fullText     = '';
   let speakFired   = false;
 
   for await (const chunk of stream) {
+    if (!firstChunkAt) firstChunkAt = Date.now();
+    finishReason = chunk.choices[0]?.finish_reason || finishReason;
     fullText += chunk.choices[0]?.delta?.content || '';
 
     // Extract speak field as soon as its closing quote appears in the stream
@@ -450,15 +462,28 @@ async function processTurn({
           .replace(/\\"/g, '"')
           .replace(/\\\\/g, '\\');
         speakFired = true;
+        speakReadyAt = Date.now();
         if (earlySpeak && onSpeakReady) onSpeakReady(earlySpeak);
       }
     }
   }
 
+  const modelMs = Date.now() - modelStart;
+  console.log(
+    `[AI] OpenAI response | model=${LIVE_AGENT_MODEL} agent=${currentAgent} ` +
+    `first_chunk_ms=${firstChunkAt ? firstChunkAt - modelStart : 'none'} ` +
+    `speak_ready_ms=${speakReadyAt ? speakReadyAt - modelStart : 'none'} ` +
+    `total_ms=${modelMs} finish=${finishReason || 'unknown'} chars=${fullText.length}`
+  );
+
   let parsed;
   try {
     parsed = JSON.parse(fullText);
-  } catch {
+  } catch (err) {
+    console.error(
+      `[AI] JSON parse failed | model=${LIVE_AGENT_MODEL} agent=${currentAgent} ` +
+      `error=${err.message} raw=${JSON.stringify(fullText.slice(0, 500))}`
+    );
     parsed = { speak: "Sorry, I didn't quite catch that — could you say it again?", action: 'none', intent: null };
   }
 
