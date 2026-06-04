@@ -426,7 +426,7 @@ async function processTurn({
 
   // ── Stream GPT response — extract speak ASAP, start TTS before GPT finishes ──
   const stream = await openai.chat.completions.create({
-    model:       'gpt-4o',
+    model:       'gpt-5.4-mini',
     messages:    [{ role: 'system', content: systemPrompt }, ...history],
     temperature: 0.3,
     max_tokens:  300,
