@@ -673,8 +673,12 @@ async function executeAction(action, params, patient, callerNumber, history = []
         return {
           appointmentId: a.appointmentId,
           display: `${t.dayName} às ${t.timeStr} da ${t.period} com ${a.medicName || a.medicShortName}`,
-          doctor:  a.medicName || a.medicShortName,
-          date:    a.appointmentDateBegin || a.appointmentDate,
+          doctor:      a.medicName || a.medicShortName,
+          medicName:   a.medicName || a.medicShortName,
+          date:        iso?.split('T')[0],
+          time:        iso?.split('T')[1]?.slice(0, 5),
+          displayDate: t.dayName,
+          displayTime: t.timeStr,
         };
       });
       return { appointments };
@@ -846,7 +850,8 @@ async function executeAction(action, params, patient, callerNumber, history = []
           phoneNumber: callerNumber || patient.patientPhoneNumber,
           displayDate: cancelledAppt?.displayDate,
           displayTime: cancelledAppt?.displayTime,
-          medicName:   cancelledAppt?.medicName || cancelledAppt?.medicShortName,
+          medicName:   cancelledAppt?.medicName || cancelledAppt?.doctor,
+          date:        cancelledAppt?.date,
         }).catch(err => console.error('[SMS] Cancel SMS failed:', err.message));
       }
 
