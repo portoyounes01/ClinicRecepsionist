@@ -317,8 +317,8 @@ function start() {
 // ─── Send a notification to the manager ──────────────────────────────────────
 function notify(text, options = {}) {
   const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!bot || !chatId) return;
-  bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...options }).catch(e =>
+  if (!bot || !chatId) return Promise.resolve();  // always return a Promise
+  return bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...options }).catch(e =>
     console.error('[Telegram] notify error:', e.message)
   );
 }
