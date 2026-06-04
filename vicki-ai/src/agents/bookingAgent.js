@@ -152,13 +152,19 @@ FORMATO DE RESPOSTA (apenas JSON válido):
     "slotBase64": "...",
     "motiveName": "...",
     "reasonText": "limpeza",
+    "dateFrom": "AAAA-MM-DD",
     "patientName": "Nome Completo",
     "patientEmail": "paciente@exemplo.com",
     "patientNif": "123456789",
     "patientPhoneNumber": "912345678",
     "searchDirection": "earlier|later"
   }
-}`;
+}
+
+REGRA DATAS:
+- Se o paciente pedir uma data específica (ex. "dia 22 de junho", "semana que vem", "segunda-feira"), inclui SEMPRE "dateFrom": "AAAA-MM-DD" nos params ao chamar check_slots.
+- Converte o que o paciente disser para formato ISO (AAAA-MM-DD) com base na data de hoje (${new Date().toISOString().split('T')[0]}).
+- Omite dateFrom se o paciente não especificou data — o sistema usa a próxima vaga disponível.`;
 }
 
 module.exports = { buildPrompt, LOULE_DOCTOR_IDS };

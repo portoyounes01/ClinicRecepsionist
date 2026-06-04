@@ -480,7 +480,21 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           console.log(`[TTS] Patience filler: "${filler}"`);
           speakToCaller(filler, () => {});
         }
-      }, 2500);
+      }, 3500); // raised from 2500 — avoids firing on normal 3-4s AI responses
+
+      // ── History trimmer — keep max 24 messages, always preserve slot/appt context ──
+      // Large histories slow the AI and increase hallucination risk.
+      const MAX_HISTORY = 24;
+      if (conversationHistory.length > MAX_HISTORY) {
+        // Identify critical system messages to preserve (slots, appointments)
+        const criticalKeywords = ['slotBase64=', '[ref:', 'Slots disponíveis', 'Consultas do paciente', 'RETOMA DA MARCAÇÃO'];
+        const isCritical = m => m.role === 'system' && criticalKeywords.some(k => m.content?.includes(k));
+        const critical   = conversationHistory.filter(isCritical);
+        const rest       = conversationHistory.filter(m => !isCritical(m));
+        const trimmed    = rest.slice(-(MAX_HISTORY - critical.length));
+        conversationHistory = [...critical, ...trimmed];
+        console.log(`[History] Trimmed to ${conversationHistory.length} messages`);
+      }
 
       const result = await processTurn({
         history:        conversationHistory,

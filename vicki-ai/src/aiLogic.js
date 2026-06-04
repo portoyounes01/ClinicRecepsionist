@@ -446,9 +446,8 @@ function formatActionResponse(action, actionResult) {
         speak: `A sua próxima consulta é ${a.display}.${more} Deseja fazer alguma alteração?`,
         action: 'none',
         pendingAppointments: appts,
-        // Store appointmentIds in history so AI can reference them for cancel
         _appointmentsContext: appts.map((ap, i) =>
-          `Appointment ${i+1}: ${ap.display} [ref:${ap.appointmentId}]`
+          `Consulta ${i+1}: ${ap.display} [ref:${ap.appointmentId}]`
         ).join('\n'),
       };
     }
@@ -508,7 +507,19 @@ async function executeAction(action, params, patient, callerNumber) {
       let dateFrom = today;
       let dateTo   = maxDate;
 
-      if (searchDirection === 'earlier') {
+      // ── Date range logic ─────────────────────────────────────────────────
+      // Priority:
+      //   1. AI gave an explicit dateFrom (patient said "dia 22 de junho") → use it as start
+      //   2. Earlier search → search before the last offered date
+      //   3. Later search → start 1 day after last offered date
+      //   4. Default → start from today
+      const aiDateFrom = params.dateFrom || params.date || null; // AI-extracted explicit date
+
+      if (aiDateFrom) {
+        // Patient requested a specific date — use it as the start, search up to +14 days from it
+        dateFrom = aiDateFrom;
+        dateTo   = addDaysIso(aiDateFrom, 14);
+      } else if (searchDirection === 'earlier') {
         dateTo = params._explicitDateTo
           || (params._lastOfferedDate ? addDaysIso(params._lastOfferedDate, -1) : maxDate);
         if (dateTo < dateFrom) return { slots: [], searchDirection, dateFrom, dateTo };
@@ -771,13 +782,16 @@ async function processTurn({
   // We inject a system instruction instead of polluting history with fake patient text.
   const isSyntheticTurn = userText === '[continua]';
   if (isSyntheticTurn) {
-    // Don't push to history — inject a system nudge instead
-    history.push({ role: 'system', content:
-      `[INSTRUÇÃO INTERNA — não mostrar ao paciente] ` +
-      `Acabaste de ser activado como agente ${currentAgent}. ` +
-      `Abre naturalmente: apresenta a informação relevante ou, se estás no contexto de marcação, ` +
-      `oferece o slot que ficou pendente. Fala como se fosse a tua primeira frase neste turno.`
-    });
+    // Different instruction per agent — appointments MUST call get_appointments first
+    // to get real IDs before any cancel attempt
+    const syntheticInstruction = currentAgent === 'appointments'
+      ? `[INSTRUÇÃO INTERNA] Chama IMEDIATAMENTE get_appointments para carregar as consultas reais do paciente via API. ` +
+        `Não uses dados de histórico — precisas dos appointmentIds reais para cancelar. ` +
+        `Após receberes os resultados, apresenta ao paciente e pergunta o que quer fazer.`
+      : `[INSTRUÇÃO INTERNA] Acabaste de ser activado como agente ${currentAgent}. ` +
+        `Abre naturalmente: apresenta a informação relevante ou, se estás no contexto de marcação, ` +
+        `oferece o slot que ficou pendente. Fala como se fosse a tua primeira frase neste turno.`;
+    history.push({ role: 'system', content: syntheticInstruction });
   } else {
     history.push({ role: 'user', content: userText });
   }
@@ -1033,7 +1047,7 @@ async function processTurn({
             history.push({ role: 'system', content: `Slots disponíveis encontrados:\n${formatted._slotsContext}\n\nUsa o slotBase64 correto quando o paciente confirmar uma opção.` });
           }
           if (formatted._appointmentsContext) {
-            history.push({ role: 'system', content: `Patient appointments:\n${formatted._appointmentsContext}\n\nUse the [ref:ID] values server-side only for cancel_appointment. Never reveal IDs to the patient.` });
+            history.push({ role: 'system', content: `Consultas do paciente:\n${formatted._appointmentsContext}\n\nUsa os valores [ref:ID] apenas server-side para cancel_appointment. NUNCA reveles IDs ao paciente.` });
           }
           history.push({ role: 'assistant', content: JSON.stringify({ speak: formatted.speak, action: formatted.action || 'none', params: {} }) });
           return {
