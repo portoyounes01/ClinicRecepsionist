@@ -31,6 +31,12 @@ function lookupBridgeFor(userText, currentAgent, pendingSlots) {
   return "Let me check that for you.";
 }
 
+function clearTelnyxAudio(telnyxWs, reason = '') {
+  if (telnyxWs?.readyState !== 1) return;
+  telnyxWs.send(JSON.stringify({ event: 'clear' }));
+  console.log(`[TTS] Telnyx clear sent${reason ? ` (${reason})` : ''}`);
+}
+
 // ─────────────────────────────────────────────
 // SPEAK — stream ElevenLabs audio to Telnyx
 // ─────────────────────────────────────────────
@@ -44,7 +50,13 @@ async function speak(text, telnyxWs, onDone, getAbort) {
 
   console.log(`[TTS] Vicki says: "${text}"`);
   let aborted = false;
-  if (getAbort) getAbort(() => { aborted = true; });
+  if (getAbort) {
+    getAbort((reason = 'abort') => {
+      if (aborted) return;
+      aborted = true;
+      clearTelnyxAudio(telnyxWs, reason);
+    });
+  }
 
   try {
     const audioStream = await elevenlabs.textToSpeech.stream(
@@ -270,12 +282,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     const wordCount = transcript.split(/\s+/).filter(Boolean).length;
     console.log(`[STT] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}"${confidence < 0.75 && isFinal ? ` (conf:${confidence.toFixed(2)})` : ''}`);
 
-    // Barge-in: patient says 3+ words while Vicki speaks → stop her
-    // 3 words avoids false triggers from short noise/echo while still catching real interruptions.
-    if (isSpeaking && currentAbort && wordCount >= 3) {
+    // Barge-in: patient says 2+ words while Vicki speaks -> stop her.
+    // The abort also sends Telnyx "clear" so already queued audio stops playing.
+    if (isSpeaking && currentAbort && wordCount >= 2) {
       console.log('[Barge-in] Patient interrupted — stopping Vicki');
       clearTimeout(processingTimer); processingTimer = null;
-      currentAbort(); currentAbort = null; isSpeaking = false;
+      currentAbort('barge-in'); currentAbort = null; isSpeaking = false;
       pendingTranscript = '';
     }
 
@@ -354,7 +366,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         // For check_slots: bridge phrase is a loading message — let it finish first.
         const isResultAction = ['book_appointment', 'cancel_appointment'].includes(result.actionFired);
         if (speakStarted && isResultAction && currentAbort) {
-          currentAbort(); // abort bridge — bridgeDone() fires in finally, resolving bridgePromise
+          currentAbort('action-result'); // abort bridge — bridgeDone() fires in finally, resolving bridgePromise
           currentAbort = null;
         }
         if (speakStarted) await bridgePromise;
