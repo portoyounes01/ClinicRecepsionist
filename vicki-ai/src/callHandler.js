@@ -28,6 +28,11 @@ const CLINIC_INFO = {
 async function speak(text, telnyxWs, onDone, getAbort) {
   if (!text?.trim() || telnyxWs.readyState !== 1) { if (onDone) onDone(); return; }
 
+  const ttsStart = Date.now();
+  let streamReadyAt = null;
+  let firstMediaAt = null;
+  let bytesSent = 0;
+
   console.log(`[TTS] Vicki says: "${text}"`);
   let aborted = false;
   if (getAbort) getAbort(() => { aborted = true; });
@@ -43,6 +48,7 @@ async function speak(text, telnyxWs, onDone, getAbort) {
         voice_settings: { stability: 0.5, similarity_boost: 0.8 },
       }
     );
+    streamReadyAt = Date.now();
 
     // Buffer PCM chunks — sending each tiny chunk separately causes choppy audio.
     // Accumulate into 1600-byte blocks (~200ms at 8kHz) before sending to Telnyx.
@@ -51,7 +57,10 @@ async function speak(text, telnyxWs, onDone, getAbort) {
 
     const flush = () => {
       if (buffer.length === 0 || aborted || telnyxWs.readyState !== 1) return;
-      telnyxWs.send(JSON.stringify({ event: 'media', media: { payload: buffer.toString('base64') } }));
+      const send = buffer;
+      telnyxWs.send(JSON.stringify({ event: 'media', media: { payload: send.toString('base64') } }));
+      if (!firstMediaAt) firstMediaAt = Date.now();
+      bytesSent += send.length;
       buffer = Buffer.alloc(0);
     };
 
@@ -64,6 +73,8 @@ async function speak(text, telnyxWs, onDone, getAbort) {
         buffer = buffer.slice(CHUNK_SIZE);
         if (!aborted && telnyxWs.readyState === 1) {
           telnyxWs.send(JSON.stringify({ event: 'media', media: { payload: send.toString('base64') } }));
+          if (!firstMediaAt) firstMediaAt = Date.now();
+          bytesSent += send.length;
         }
       }
     }
@@ -72,9 +83,16 @@ async function speak(text, telnyxWs, onDone, getAbort) {
 
     if (!aborted) {
       telnyxWs.send(JSON.stringify({ event: 'mark', mark: { name: 'vicki_done_speaking' } }));
-      console.log('[TTS] Audio sent');
+      console.log(
+        `[TTS] Audio sent | stream_ready_ms=${streamReadyAt ? streamReadyAt - ttsStart : 'none'} ` +
+        `first_media_ms=${firstMediaAt ? firstMediaAt - ttsStart : 'none'} ` +
+        `total_ms=${Date.now() - ttsStart} bytes=${bytesSent}`
+      );
     } else {
-      console.log('[TTS] Interrupted');
+      console.log(
+        `[TTS] Interrupted | first_media_ms=${firstMediaAt ? firstMediaAt - ttsStart : 'none'} ` +
+        `total_ms=${Date.now() - ttsStart} bytes=${bytesSent}`
+      );
     }
   } catch (err) {
     if (!aborted) console.error('[TTS] Error:', err.message);
@@ -260,7 +278,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     // Accumulate this FINAL into the pending buffer
     pendingTranscript += (pendingTranscript ? ' ' : '') + transcript;
 
-    // ⚡ Debounce: wait 150ms (was 400ms) — still merges fast split utterances
+    // ⚡ Debounce: wait 150ms — still merges fast split utterances
     clearTimeout(processingTimer);
     processingTimer = setTimeout(async () => {
       const userText = pendingTranscript.trim();
@@ -412,7 +430,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       await speakNow('Sorry, could you repeat that?', () => { isSpeaking = false; currentAbort = null; });
       isSpeaking = false;
     }
-    }, 400); // end debounce timer
+    }, 150); // end debounce timer
   });
 
   // ── Telnyx WebSocket ──────────────────────
