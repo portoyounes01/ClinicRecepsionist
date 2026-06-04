@@ -1,15 +1,16 @@
 // ============================================================
-// VICKI AI — Call Handler  (v5 — stable Deepgram)
+// VICKI AI — Call Handler  (v6 — Soniox pt-PT)
 // ============================================================
 
-const { createClient, LiveTranscriptionEvents } = require('@deepgram/sdk');
+const WebSocket = require('ws');
 const { ElevenLabsClient }    = require('@elevenlabs/elevenlabs-js');
 const { processTurn, generateCallSummary } = require('./aiLogic');
 const cache         = require('./newsoftCache');
 const newsoft       = require('./newsoftApi');
 const { getPatientMemory, updateAfterCall, logCallOutcome } = require('./patientMemory');
 
-const deepgramClient = createClient(process.env.DEEPGRAM_API_KEY);
+// Soniox real-time WebSocket endpoint
+const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
 const elevenlabs     = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
 
 const CLINIC_INFO = {
@@ -207,7 +208,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let unclearTurns        = 0;
   let isSpeaking          = false;
   let currentAbort        = null;
-  let deepgramOpen        = false;
+  let sonioxOpen          = false;
+  let sonioxWs            = null;
   let pendingTranscript   = '';
   let processingTimer     = null;
   let pendingSlots        = [];
@@ -290,91 +292,115 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
 
 
-  // ── Create Deepgram immediately — gives it time to open before first media ──
-  // The SDK queues audio internally while connecting, so no readyState check needed.
-  // ── Build keyword list from global cache (pre-loaded at warm-up) — boosts
-  // recognition of doctor names so "Hermas" → "Hermes", "Carla" is heard correctly
+  // ── Build Soniox speech context from doctor names + dental vocabulary ──────
+  // Soniox uses a "context" object to boost domain-specific accuracy.
+  // Doctor names are pulled from cache so recognition is always up to date.
   let allDoctors = [];
   try { allDoctors = await cache.getDoctors(); } catch (_) {}
-  const doctorKeywords = allDoctors.flatMap(d => {
-    const names = [];
-    const stripTitle = n => (n || '').replace(/^Dr[ªº]?\.?\s*/i, '').trim();
-    if (d.medicShortName) names.push(`${stripTitle(d.medicShortName)}:8`);
-    if (d.medicName)      names.push(`${stripTitle(d.medicName)}:6`);
-    return names.filter(n => n.length > 3);
-  });
-  // Also boost common clinic terms
-  const clinicKeywords = ['appointment', 'checkup', 'cleaning', 'Hermes', 'Nadine', 'Carla', 'Vilas', 'Boas', 'Beatriz', 'Hugo', 'Miguel', 'Carolina', 'Silvia', 'Fernando',
-    // Portuguese dental/booking terms
-    'consulta', 'marcação', 'cancelar', 'desmarcar', 'limpeza', 'dor', 'urgência',
-    'dentista', 'ortodontia', 'implante', 'obturação', 'extração',
-    'manhã', 'tarde', 'amanhã', 'semana', 'segunda', 'terça', 'quarta', 'quinta', 'sexta',
-  ].map(w => `${w}:5`);
-  const allKeywords    = [...new Set([...doctorKeywords, ...clinicKeywords])];
-  console.log('[STT] Keywords active:', allKeywords.slice(0, 4).join(', '), '...');
-  const deepgramLive = deepgramClient.listen.live({
-    model:           'nova-2',
-    language:        'en',           // English only for now
-    encoding:        'linear16',
-    sample_rate:     8000,
-    interim_results: true,
-    endpointing:     300,
-  });
+  const stripTitle = n => (n || '').replace(/^Dr[ªº]?\.?\s*/i, '').trim();
+  const doctorNames = allDoctors.flatMap(d => [
+    d.medicShortName ? stripTitle(d.medicShortName) : null,
+    d.medicName      ? stripTitle(d.medicName)      : null,
+  ]).filter(Boolean).filter(n => n.length > 2);
 
-  deepgramLive.on(LiveTranscriptionEvents.Open, () => {
-    deepgramOpen = true;
-    console.log('[Deepgram] Connection open');
-  });
+  const clinicTerms = [
+    // Doctor names
+    'Hermes', 'Nadine', 'Carla', 'Beatriz', 'Hugo', 'Miguel', 'Carolina', 'Sílvia', 'Fernando',
+    // Clinic name
+    'Vilas Boas', 'Instituto Vilas Boas',
+    // Portuguese dental terms
+    'consulta', 'marcação', 'cancelar', 'desmarcar', 'remarcar', 'limpeza', 'destartarização',
+    'ortodontia', 'implante', 'obturação', 'extração', 'urgência', 'dor de dentes',
+    'check-up', 'higiene oral', 'branqueamento', 'aparelho', 'gengivite',
+    // Booking/time words
+    'manhã', 'tarde', 'amanhã', 'próxima semana', 'segunda-feira', 'terça-feira',
+    'quarta-feira', 'quinta-feira', 'sexta-feira',
+    // English terms patients might use
+    'appointment', 'cleaning', 'checkup', 'braces', 'filling', 'whitening',
+  ];
+  const contextWords = [...new Set([...doctorNames, ...clinicTerms])];
+  console.log('[STT] Soniox context words:', contextWords.slice(0, 6).join(', '), '...');
 
-  deepgramLive.on(LiveTranscriptionEvents.Error, (err) => {
-    console.error('[Deepgram] FULL ERROR:', JSON.stringify(err, null, 2));
-    console.error('[Deepgram] message:', err?.message);
-    console.error('[Deepgram] status:', err?.status);
-    console.error('[Deepgram] API key set:', !!process.env.DEEPGRAM_API_KEY, '| prefix:', (process.env.DEEPGRAM_API_KEY||'').slice(0,8));
-  });
+  // ── Open Soniox WebSocket immediately ────────────────────────────────────────
+  // Audio is queued locally until the connection opens.
+  const sonioxAudioQueue = [];
 
-  deepgramLive.on(LiveTranscriptionEvents.Close, (ev) => {
-    deepgramOpen = false;
-    console.log('[Deepgram] Closed — code:', ev?.code, 'reason:', ev?.reason || '(none)');
-  });
+  function openSoniox() {
+    const ws = new WebSocket(SONIOX_WS_URL);
+    sonioxWs = ws;
 
-  // ── Transcript handler ──
-  // Update silence timer on every transcript
-  deepgramLive.on(LiveTranscriptionEvents.Transcript, async (data) => {
-    const alt        = data.channel?.alternatives?.[0];
-    const raw        = alt?.transcript?.trim();
-    const confidence = alt?.confidence ?? 1;
-    const isFinal    = data.is_final;
-    if (!raw) return;
-    if (isFinal) lastSpeechTime = Date.now(); // reset silence watchdog
+    ws.on('open', () => {
+      sonioxOpen = true;
+      console.log('[Soniox] Connection open');
+      // Send config message first
+      ws.send(JSON.stringify({
+        api_key:          process.env.SONIOX_API_KEY,
+        model:            'stt-rt-v4',
+        language_hints:   ['pt', 'en'],   // pt-PT primary, English fallback
+        enable_interim_results: true,
+        endpointing_sensitivity: 0.6,     // 0=least sensitive, 1=most (300ms equiv)
+        context: {
+          entries: contextWords.map(w => ({ value: w })),
+        },
+        audio_format: {
+          type:        'raw',
+          encoding:    'linear16',
+          sample_rate: 8000,
+          channels:    1,
+        },
+      }));
+      // Flush queued audio
+      while (sonioxAudioQueue.length) ws.send(sonioxAudioQueue.shift());
+    });
 
-    // ── Confidence filter — skip near-noise transcripts ──────────────
-    if (isFinal && confidence < 0.40) {
-      console.log(`[STT] Low-confidence (${confidence.toFixed(2)}) skipped: "${raw}"`);
+    ws.on('error', (err) => {
+      console.error('[Soniox] WebSocket error:', err.message);
+    });
+
+    ws.on('close', (code, reason) => {
+      sonioxOpen = false;
+      console.log('[Soniox] Closed — code:', code, 'reason:', reason?.toString() || '(none)');
+    });
+
+    ws.on('message', handleSonioxMessage);
+  }
+
+  openSoniox();
+
+  // ── Soniox transcript handler ─────────────────────────────────────────────
+  async function handleSonioxMessage(raw) {
+    let data;
+    try { data = JSON.parse(raw); } catch { return; }
+
+    if (data.error) {
+      console.error('[Soniox] API error:', data.error, data.message || '');
       return;
     }
 
-    // ── Transcript cleanup ────────────────────────────────────────────
-    // 1. Deduplicate repeated sentences: "No. No. No. No." → "No."
-    //    (happens when barge-in fires mid-repetition)
-    // 2. Map common Deepgram mishears for Portuguese-accented English
-    const MISHEAR_MAP = {
-      'hermas': 'Hermes', 'hermos': 'Hermes', 'hermès': 'Hermes',
-      'acarla': 'Carla',  'a carla': 'Carla',
-      'i saved': 'I said', 'i safe': 'I said',
-    };
-    let transcript = raw
-      // remove duplicate adjacent sentences
-      .replace(/\b(.{4,})\b(?:[.,!?]?\s+\1)+/gi, '$1')
-      // mishear substitutions (whole-word)
-      .replace(/\b(hermas|hermos|herm[eè]s|acarla|a carla|i saved|i safe)\b/gi,
-        m => MISHEAR_MAP[m.toLowerCase()] || m);
+    // Soniox sends token arrays; reconstruct text
+    const tokens  = data.tokens || [];
+    const isFinal = data.type === 'final';            // 'partial' | 'final'
+    const text    = tokens.map(t => t.text).join('').trim();
+    if (!text) return;
 
-    const wordCount = transcript.split(/\s+/).filter(Boolean).length;
-    console.log(`[STT] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}"${confidence < 0.75 && isFinal ? ` (conf:${confidence.toFixed(2)})` : ''}`);
+    if (isFinal) lastSpeechTime = Date.now(); // reset silence watchdog
+
+    // ── Confidence filter — skip near-noise final transcripts ────────
+    const confidence = tokens.length
+      ? tokens.reduce((s, t) => s + (t.confidence ?? 1), 0) / tokens.length
+      : 1;
+    if (isFinal && confidence < 0.40) {
+      console.log(`[STT] Low-confidence (${confidence.toFixed(2)}) skipped: "${text}"`);
+      return;
+    }
+
+    // ── Deduplicate repeated words (barge-in artifact) ───────────────
+    const transcript = text.replace(/\b(.{4,})\b(?:[.,!?]?\s+\1)+/gi, '$1');
+    const wordCount  = transcript.split(/\s+/).filter(Boolean).length;
+
+    console.log(`[STT] ${isFinal ? 'FINAL' : 'partial'}: "${transcript}"${confidence < 0.75 && isFinal ? ` (conf:${confidence.toFixed(2)})` : ''}`);
 
     // Barge-in: patient says 2+ words while Vicki speaks -> stop her.
-    // The abort also sends Telnyx "clear" so already queued audio stops playing.
     if (isSpeaking && currentAbort && wordCount >= 2) {
       console.log('[Barge-in] Patient interrupted — stopping Vicki');
       clearTimeout(processingTimer); processingTimer = null;
@@ -676,11 +702,16 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           break;
 
         case 'media':
-          if (msg.media?.payload && deepgramOpen) {
+          if (msg.media?.payload) {
             const linear = pcmaToLinear16(Buffer.from(msg.media.payload, 'base64'));
             // NOTE: audio-level barge-in removed — phone echo triggers false positives.
             // Word-count barge-in (2+ words) handles interrupts reliably instead.
-            deepgramLive.send(linear);
+            if (sonioxOpen && sonioxWs?.readyState === WebSocket.OPEN) {
+              sonioxWs.send(linear);
+            } else {
+              // Queue audio until Soniox connection is ready
+              sonioxAudioQueue.push(linear);
+            }
           }
           break;
 
@@ -711,7 +742,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     console.log('[Call] Closed');
     clearTimeout(maxDurationWatchdog);
     clearInterval(silenceWatchdog);
-    try { deepgramLive.requestClose(); } catch (_) {}
+    try { if (sonioxWs) { sonioxWs.close(); sonioxWs = null; } } catch (_) {}
   });
 
   ws.on('error', (err) => console.error('[WS] Error:', err.message));
