@@ -1001,28 +1001,33 @@ async function processTurn({
   parsed.speak = speak;
   parsed.params = params;
 
-  // ── HARD GUARD: force book_appointment if AI acknowledged booking without calling API ──
-  // This catches: AI says "Está tudo tratado!" with action=none, or AI asks for name
-  // when patient is already known. Both are bugs where the AI bypassed the API call.
+  // ── HARD GUARD: force book_appointment if AI skipped the API call ────────────
+  // Catches ALL cases where AI confirmed booking but never called book_appointment:
+  //   - action='none'   → AI spoke "Está tudo tratado!" without booking
+  //   - action='hangup' → AI hung up after "Sim." without ever booking (this bug!)
+  // If pendingSlots + known patient + patient confirmed → MUST book before anything else.
   if (
     currentAgent === 'booking' &&
-    action === 'none' &&
+    (action === 'none' || action === 'hangup') &&
     pendingSlots?.length > 0 &&
     patient?.patientId
   ) {
-    const speakLower = (speak || '').toLowerCase();
     const textLower  = (userText || '').toLowerCase();
-    const isConfirmSpeak = /est[aá]\s*(tudo|marcad|feito|confirm|tratad)/i.test(speak || '');
-    const isNameResponse = /\b(walter|miguel|ventura|ant[oó]nio|silva|santos|ferreira|pereira|costa|sousa|gomes|lopes|marques|ribeiro|carvalho|alves|oliveira)\b/i.test(userText || '');
     const isConfirmText  = /^(sim|ok|okay|claro|pode|por favor|confirmo|exato|certo|quero|vamos|vai|avança|marca|marque)\b/i.test(textLower);
+    const isConfirmSpeak = /est[aá]\s*(tudo|marcad|feito|confirm|tratad|pronto)/i.test(speak || '');
+    const isNameResponse = /\b[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]{2,}(\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]{2,})+\b/.test(userText || '');
 
-    if (isConfirmSpeak || isNameResponse) {
-      // AI verbally booked or patient gave name — force the real API call
-      console.log(`[Guard] FORCE book_appointment — AI spoke booking confirmation without API call. Patient: ${patient.patientId}`);
+    if (isConfirmText || isConfirmSpeak || isNameResponse) {
+      console.log(`[Guard] FORCE book_appointment — action was "${action}", slots pending, patient confirmed. ID: ${patient.patientId}`);
       action = 'book_appointment';
       params = { ...params, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText };
       parsed.action = action;
       parsed.params = params;
+      // If AI was hanging up mid-booking, give a neutral bridge while we process
+      if (/adeus|até logo|obrigad/i.test(speak || '')) {
+        speak = 'Um momento — a confirmar a sua marcação.';
+        parsed.speak = speak;
+      }
     }
   }
 
