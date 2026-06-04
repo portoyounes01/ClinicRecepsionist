@@ -401,39 +401,49 @@ function formatActionResponse(action, actionResult) {
         };
       }
 
-      const morning   = slots.find(s => s.period === 'morning');
-      const afternoon = slots.find(s => s.period !== 'morning');
-      const options   = [morning, afternoon].filter(Boolean);
+      // Split into morning (before 13h) and afternoon (13h+)
+      const morningSlots   = slots.filter(s => s.period === 'manhã');
+      const afternoonSlots = slots.filter(s => s.period !== 'manhã');
 
       let speak;
-      if (options.length === 1) {
-        const s = options[0];
+      const sameDoctor = slots.every(s => s.medicName === slots[0].medicName);
+      const sameDay    = slots.every(s => s.date === slots[0].date);
+      const dayLabel   = sameDay ? humanSlot(slots[0].date + 'T' + slots[0].time).dayName : null;
+
+      if (morningSlots.length >= 1 && afternoonSlots.length >= 1) {
+        // Has both morning and afternoon
+        const am1 = humanSlot(morningSlots[0].date + 'T' + morningSlots[0].time);
+        const pm1 = humanSlot(afternoonSlots[0].date + 'T' + afternoonSlots[0].time);
+        if (sameDoctor) {
+          speak = `Tenho ${am1.dayName} — ${am1.timeStr} de manhã ou ${pm1.timeStr} de tarde, ambos com ${slots[0].medicName}. Qual prefere?`;
+        } else {
+          speak = `Tenho ${am1.dayName} às ${am1.timeStr} com ${morningSlots[0].medicName}, ou ${pm1.timeStr} de tarde com ${afternoonSlots[0].medicName}. Qual prefere?`;
+        }
+      } else if (morningSlots.length >= 2) {
+        // Only morning, 2 options
+        const [m1, m2] = morningSlots.map(s => humanSlot(s.date + 'T' + s.time));
+        speak = `Tenho ${m1.dayName} às ${m1.timeStr} ou às ${m2.timeStr}, ambos de manhã${sameDoctor ? ' com ' + slots[0].medicName : ''}. Qual prefere?`;
+      } else if (afternoonSlots.length >= 2) {
+        // Only afternoon, 2 options
+        const [p1, p2] = afternoonSlots.map(s => humanSlot(s.date + 'T' + s.time));
+        speak = `Tenho ${p1.dayName} às ${p1.timeStr} ou às ${p2.timeStr}, ambos de tarde${sameDoctor ? ' com ' + slots[0].medicName : ''}. Qual prefere?`;
+      } else {
+        // Single slot
+        const s = slots[0];
         const t = humanSlot(s.date + 'T' + s.time);
         speak = `Tenho vaga ${t.dayName} às ${t.timeStr} com ${s.medicName} — assim está bem para si?`;
-      } else {
-        const [am, pm] = options;
-        const amT = humanSlot(am.date + 'T' + am.time);
-        const pmT = humanSlot(pm.date + 'T' + pm.time);
-        const day = amT.dayName === pmT.dayName ? amT.dayName : `${amT.dayName} ou ${pmT.dayName}`;
-
-        if (am.medicName === pm.medicName) {
-          // Mesmo médico — não repete o nome duas vezes
-          speak = `Tenho ${day} com ${am.medicName} — ${amT.timeStr} de manhã ou ${pmT.timeStr} de tarde. Qual lhe convém melhor?`;
-        } else {
-          speak = `Tenho ${day} — ${amT.timeStr} com ${am.medicName}, ou ${pmT.timeStr} com ${pm.medicName}. Qual prefere?`;
-        }
       }
 
       return {
         speak,
         action: 'none',
         pendingSlots: slots,
-        // Contexto em pt-PT para o agente referenciar os slots correctamente
-        _slotsContext: options.map((s, i) =>
-          `Opção ${i+1} (${s.period}): ${humanSlot(s.date+'T'+s.time).dayName} às ${humanSlot(s.date+'T'+s.time).timeStr} da ${s.period} com ${s.medicName}\nslotBase64=${s.slotBase64}`
+        _slotsContext: slots.map((s, i) =>
+          `Slot ${i+1} (${s.period}): ${humanSlot(s.date+'T'+s.time).dayName} às ${humanSlot(s.date+'T'+s.time).timeStr} da ${s.period} com ${s.medicName}\nslotBase64=${s.slotBase64}`
         ).join('\n\n'),
       };
     }
+
 
     case 'get_appointments': {
       const appts = actionResult.appointments || [];
@@ -552,12 +562,10 @@ async function executeAction(action, params, patient, callerNumber) {
         };
       };
 
-      // ── Smart slot picking ───────────────────────────────────────────────
-      // Goal: ONE date, ONE doctor, offer morning + afternoon on that same day.
-      // Priority: find a doctor who has BOTH morning and afternoon on the earliest day.
-      // Fallback: any doctor with at least one slot on the earliest day.
+      // ── Smart slot picking — goal: same day, up to 2 morning + 2 afternoon ──────
+      // Priority: find a doctor with both periods. Fallback: any doctor on earliest day.
+      // Returns at most 4 slots total so Vicki can offer real choice.
 
-      // Group raw slots by date (ISO date string)
       const byDate = {};
       for (const s of raw) {
         const d = s.appointmentDateBegin?.split('T')[0];
@@ -565,37 +573,59 @@ async function executeAction(action, params, patient, callerNumber) {
       }
       const sortedDates = Object.keys(byDate).sort();
 
-      let pickedMorning = null, pickedAfternoon = null;
+      let pickedSlots = [];
 
       for (const date of sortedDates) {
         const daySlots = byDate[date];
 
-        // Group by doctor within this day
+        // Split by period
+        const morningSlots   = daySlots.filter(s => {
+          const h = parseInt(s.appointmentDateBegin?.split('T')[1] || '0');
+          return h < 13;
+        });
+        const afternoonSlots = daySlots.filter(s => {
+          const h = parseInt(s.appointmentDateBegin?.split('T')[1] || '0');
+          return h >= 13;
+        });
+
+        // Prefer a single doctor who has both periods
         const byDoc = {};
         for (const s of daySlots) {
           const id = s.medicId || s.medicShortName || s.medicName;
-          if (!byDoc[id]) byDoc[id] = [];
-          byDoc[id].push(s);
+          if (!byDoc[id]) byDoc[id] = { morning: [], afternoon: [] };
+          const h = parseInt(s.appointmentDateBegin?.split('T')[1] || '0');
+          if (h < 13) byDoc[id].morning.push(s);
+          else        byDoc[id].afternoon.push(s);
         }
 
-        // Try to find a doctor with BOTH morning AND afternoon
-        for (const docSlots of Object.values(byDoc)) {
-          const m = docSlots.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') < 13);
-          const a = docSlots.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') >= 13);
-          if (m && a) { pickedMorning = m; pickedAfternoon = a; break; }
+        let chosen = [];
+        // Try doctor with both periods first
+        for (const doc of Object.values(byDoc)) {
+          if (doc.morning.length && doc.afternoon.length) {
+            chosen = [
+              ...doc.morning.slice(0, 2),
+              ...doc.afternoon.slice(0, 2),
+            ];
+            break;
+          }
         }
-        if (pickedMorning && pickedAfternoon) break;
 
-        // Fallback: any doctor with at least one slot on this day
-        for (const docSlots of Object.values(byDoc)) {
-          const m = docSlots.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') < 13);
-          const a = docSlots.find(s => parseInt(s.appointmentDateBegin?.split('T')[1] || '0') >= 13);
-          if (m || a) { pickedMorning = m || null; pickedAfternoon = a || null; break; }
+        // Fallback: best mix from all doctors
+        if (!chosen.length) {
+          const am = morningSlots.slice(0, 2);
+          const pm = afternoonSlots.slice(0, 2);
+          chosen = [...am, ...pm];
+          // If only one period exists, take up to 2 from it
+          if (!chosen.length) chosen = daySlots.slice(0, 2);
         }
-        if (pickedMorning || pickedAfternoon) break;
+
+        if (chosen.length) { pickedSlots = chosen; break; }
       }
 
-      const slots = [pickedMorning, pickedAfternoon].filter(Boolean).map(toSlot);
+      if (!pickedSlots.length && raw.length) pickedSlots = raw.slice(0, 2);
+
+      const slots = pickedSlots.map(toSlot);
+
       const lastOfferedDate = slots.length > 0
         ? slots.reduce((max, s) => s.date > max ? s.date : max, slots[0].date)
         : null;
