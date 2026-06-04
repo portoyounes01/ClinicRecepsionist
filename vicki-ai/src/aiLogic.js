@@ -1018,9 +1018,28 @@ async function processTurn({
     const isNameResponse = /\b[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]{2,}(\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]{2,})+\b/.test(userText || '');
 
     if (isConfirmText || isConfirmSpeak || isNameResponse) {
-      console.log(`[Guard] FORCE book_appointment — action was "${action}", slots pending, patient confirmed. ID: ${patient.patientId}`);
+      // Infer chosenPeriod from recent conversation (last 6 turns) so we book the RIGHT slot.
+      // Patient said "tarde" / "14h" / "afternoon" → tarde. "manhã" / "10h" / "morning" → manhã.
+      let inferredPeriod = params.chosenPeriod || null;
+      if (!inferredPeriod) {
+        const recentText = history.slice(-6)
+          .filter(m => m.role === 'user')
+          .map(m => m.content || '')
+          .join(' ')
+          .toLowerCase();
+        const recentAll = history.slice(-6).map(m => m.content || '').join(' ').toLowerCase();
+        const isTarde = /\btarde\b|\bafternoon\b|\b1[4-9]h|\b1[4-9]:\d\d/.test(recentText + ' ' + recentAll);
+        const isManha = /\bmanh[aã]\b|\bmorning\b|\b[89]h|\b1[0-2]h|\b[89]:\d\d|\b1[0-2]:\d\d/.test(recentText + ' ' + recentAll);
+        if (isTarde && !isManha) inferredPeriod = 'tarde';
+        else if (isManha && !isTarde) inferredPeriod = 'manhã';
+        // If both found, prefer what patient said most recently
+        else if (isTarde) inferredPeriod = 'tarde';
+      }
+
+      console.log(`[Guard] FORCE book_appointment — action was "${action}", slots pending, patient confirmed. ID: ${patient.patientId}, inferredPeriod: ${inferredPeriod || '(unknown)'}`);
       action = 'book_appointment';
       params = { ...params, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText };
+      if (inferredPeriod) params.chosenPeriod = inferredPeriod;
       parsed.action = action;
       parsed.params = params;
       // If AI was hanging up mid-booking, give a neutral bridge while we process

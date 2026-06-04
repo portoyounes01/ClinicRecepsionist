@@ -602,44 +602,79 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       }
 
       // ── AUTO-SPEAK: after silent inter-agent transfer, fire new agent immediately ──
-
       // Without this the new agent waits silently for patient to speak again.
-      // We wait for the bridge phrase to finish, then trigger the new agent with
-      // a synthetic "[continua]" so it opens naturally.
       if (result.autoSpeak && !callEnding) {
-        // Wait for the bridge phrase to finish playing before the new agent speaks
         if (speakStarted) await bridgePromise;
-        await new Promise(r => setTimeout(r, 150)); // tiny gap between phrases
+        await new Promise(r => setTimeout(r, 150));
         console.log(`[Agent] autoSpeak: firing ${currentAgent} after transfer`);
         isSpeaking = true;
-        const autoResult = await processTurn({
-          history:          conversationHistory,
-          patient,
-          clinicInfo:       CLINIC_INFO,
-          userText:         '[continua]',   // synthetic — tells agent to continue naturally
-          cachedDoctors,
-          cachedMotives,
-          currentAgent,
-          unclearTurns,
-          onSpeakReady:     null,           // no early speak for auto-turns
-          pendingSlots,
-          pendingAppts,
-          patientMemory,
-          lastOfferedDate,
-          bookingReasonText,
-          callerNumber,
-          returnToAgent,
-          returnContext,
-        });
-        conversationHistory = autoResult.history;
-        if (autoResult.currentAgent   !== undefined) currentAgent   = autoResult.currentAgent;
-        if (autoResult.pendingSlots   && autoResult.pendingSlots.length)  pendingSlots  = autoResult.pendingSlots;
-        if (autoResult.bookingReasonText !== undefined) bookingReasonText = autoResult.bookingReasonText;
-        if (autoResult.lastOfferedDate !== undefined) lastOfferedDate = autoResult.lastOfferedDate;
-        if (autoResult.speak) {
-          await speakNow(autoResult.speak, () => { isSpeaking = false; currentAbort = null; });
-        } else {
-          isSpeaking = false; currentAbort = null;
+        let autoResult;
+        try {
+          autoResult = await processTurn({
+            history:          conversationHistory,
+            patient,
+            clinicInfo:       CLINIC_INFO,
+            userText:         '[continua]',
+            cachedDoctors,
+            cachedMotives,
+            currentAgent,
+            unclearTurns,
+            onSpeakReady:     null,
+            pendingSlots,
+            pendingAppts,
+            patientMemory,
+            lastOfferedDate,
+            bookingReasonText,
+            callerNumber,
+            returnToAgent,
+            returnContext,
+          });
+        } catch (autoErr) {
+          console.error('[Agent] autoSpeak error:', autoErr.message);
+          isSpeaking = false;
+          autoResult = null;
+        }
+        if (autoResult) {
+          conversationHistory = autoResult.history;
+          if (autoResult.currentAgent   !== undefined) currentAgent   = autoResult.currentAgent;
+          if (autoResult.pendingSlots   && autoResult.pendingSlots.length)  pendingSlots  = autoResult.pendingSlots;
+          if (autoResult.pendingAppts   && autoResult.pendingAppts.length)  pendingAppts  = autoResult.pendingAppts;
+          if (autoResult.bookingReasonText !== undefined) bookingReasonText = autoResult.bookingReasonText;
+          if (autoResult.lastOfferedDate !== undefined) lastOfferedDate = autoResult.lastOfferedDate;
+          if (autoResult.returnToAgent) { returnToAgent = autoResult.returnToAgent; returnContext = autoResult.returnContext || {}; }
+          if (autoResult.clearReturn)   { returnToAgent = null; returnContext = {}; }
+          if (autoResult.patient?.patientId) { patient = autoResult.patient; }
+          if (autoResult.speak) {
+            await speakNow(autoResult.speak, () => { isSpeaking = false; currentAbort = null; });
+          } else {
+            isSpeaking = false; currentAbort = null;
+          }
+          // ── CRITICAL: if autoSpeak result itself wants transfer/hangup, execute it ──
+          if (autoResult.action === 'transfer_to_human' && !callEnding) {
+            callEnding = true;
+            clearTimeout(maxDurationWatchdog);
+            clearInterval(silenceWatchdog);
+            const transferNumber = process.env.CLINIC_PHONE_MOBILE || '+351962432761';
+            console.log(`[Call] autoSpeak → Transferring to human — ${transferNumber}`);
+            if (callSid) transferCalls.set(callSid, transferNumber);
+            setTimeout(() => { try { ws.close(); } catch (_) {} }, 500);
+            return;
+          }
+          if (autoResult.action === 'hangup' && !callEnding) {
+            callEnding = true;
+            clearTimeout(maxDurationWatchdog);
+            clearInterval(silenceWatchdog);
+            const durationSeconds = Math.round((Date.now() - callStartTime) / 1000);
+            generateCallSummary(conversationHistory, patient)
+              .then(summary => {
+                if (patient?.patientId) updateAfterCall(patient.patientId, { patientName: patient.patientName, summary: summary.summary, intent: summary.intent, language: summary.language, explicitDoctorPreference: summary.explicitDoctorPreference, explicitTimePreference: summary.explicitTimePreference });
+                logCallOutcome({ patientId: patient?.patientId, patientName: patient?.patientName, callerNumber, outcome: summary.outcome, intent: summary.intent, transferredToHuman: false, unclearTurns, durationSeconds, summary: summary.summary, flags: summary.flags || [] });
+              }).catch(e => console.error('[Memory] Save error:', e.message));
+            let waited2 = 0;
+            const doHangup2 = () => { if (!isSpeaking || waited2 > 6000) { try { ws.close(); } catch (_) {} } else { waited2 += 200; setTimeout(doHangup2, 200); } };
+            doHangup2();
+            return;
+          }
         }
       }
 
