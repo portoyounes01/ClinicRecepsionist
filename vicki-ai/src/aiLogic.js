@@ -360,17 +360,12 @@ async function resolvePatientForBooking({ patient, params, callerNumber }) {
     return {
       needsPatientDetails: true,
       missing: 'patientName',
-      speak: "Consigo marcar — pode dizer-me o seu nome completo para o ficheiro do paciente?",
+      speak: "Consigo marcar — pode dizer-me o seu nome completo?",
     };
   }
 
-  if (!patientPhoneNumber && !patientEmail && !patientNif) {
-    return {
-      needsPatientDetails: true,
-      missing: 'patientPhoneNumber',
-      speak: "Consigo marcar — pode dizer-me o seu número de telemóvel para o ficheiro?",
-    };
-  }
+  // Phone number comes from caller ID automatically — never ask for it
+
 
   const createdPatient = await newsoft.createOrUpdatePatient({
     patientName,

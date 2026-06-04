@@ -5,9 +5,10 @@
 
 function buildPrompt(patient, clinicInfo, memoryContext) {
   const firstName = patient?.patientName?.split(' ')[0] || null;
+  const isNewPatient = !patient; // não registado = novo paciente
   const patientCtx = firstName
     ? `O paciente que liga é ${patient.patientName}. Médico habitual: ${patient.patientMedicName || 'não registado'}.`
-    : `Chamada de número desconhecido — não registado na clínica.`;
+    : `NOVO PACIENTE — número não registado na clínica. É a primeira vez que liga (ou está a ligar de outro número).`;
 
   const memoryBlock = memoryContext
     ? `\nHISTÓRICO DO PACIENTE (use para personalizar respostas):\n${memoryContext}\n`
@@ -101,6 +102,13 @@ CONVERSA INFORMAL — responde com simpatia, mantém "unclear":
 RESPOSTA DE ENCAMINHAMENTO — diz uma frase calorosa em português de Portugal:
 
 PONTE DE MARCAÇÃO — REGRA CRÍTICA:
+${!patient ? `
+NOVO PACIENTE DETECTADO — aplica sempre esta regra:
+- Se o paciente quer marcar uma PRIMEIRA CONSULTA (qualquer motivo):
+  → Apresenta a consulta de avaliação gratuita de forma natural:
+  "Bem-vindo/a! Com todo o gosto — fazemos sempre uma consulta de avaliação gratuita para novos pacientes, onde o médico analisa tudo, explica o que é necessário e apresenta um plano personalizado sem qualquer compromisso. Qual é o motivo da consulta?"
+  → Depois segue o fluxo normal de marcação (pergunta médico → check_slots).
+` : `
 - Se paciente indicou MOTIVO E MÉDICO → termina com "um momento":
   "Com certeza, um momento enquanto verifico as disponibilidades para si!"
 - Se indicou motivo mas SEM médico → pergunta sobre médico:
@@ -109,6 +117,7 @@ PONTE DE MARCAÇÃO — REGRA CRÍTICA:
   "Com certeza! E qual é o motivo da consulta?"
 - Se não indicou NEM motivo NEM médico → pergunta o motivo:
   "Com certeza! Qual é o motivo da consulta?"
+`}
 
 - appointments: "Claro! Quer verificar, cancelar ou remarcar uma consulta?"
 - info: "Com todo o gosto — o que gostaria de saber?"
