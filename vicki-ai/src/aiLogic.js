@@ -24,6 +24,22 @@ const { LOULE_DOCTOR_IDS } = bookingAgent;
 const LIVE_AGENT_MODEL = 'gpt-5.4-mini';
 
 // ─────────────────────────────────────────────
+// TRANSFER SPEAK — mandatory hold message
+// Called before EVERY transfer_to_human.
+// Varies naturally so it never sounds scripted.
+// ─────────────────────────────────────────────
+function transferSpeak(patient) {
+  const firstName = patient?.patientName?.split(' ')[0];
+  const name = firstName ? `, ${firstName}` : '';
+  const phrases = [
+    `Please hold for just a moment${name} — I'm connecting you with one of our team members who will be happy to assist you.`,
+    `Of course${name} — please hold on just a second while I transfer you to one of our colleagues who can help you with that.`,
+    `Absolutely${name} — just one moment please while I put you through to someone from our team who can take care of this for you.`,
+  ];
+  return phrases[Math.floor(Date.now() / 1000) % phrases.length];
+}
+
+// ─────────────────────────────────────────────
 // HUMAN DATE/TIME FORMATTER
 // "2026-06-03T14:45:00" → "next Tuesday at quarter to three in the afternoon"
 // ─────────────────────────────────────────────
@@ -390,7 +406,7 @@ function formatActionResponse(action, actionResult) {
       }
       if (actionResult.error || !actionResult.appointmentId) {
         return {
-          speak: "I'm sorry, I couldn't complete the booking in the system. Let me connect you with the team so they can finish it for you.",
+          speak: "I'm sorry, I wasn't able to complete that booking in our system. Please hold for just a moment — I'm connecting you with one of our team members who will sort this out for you right away.",
           action: 'transfer_to_human',
         };
       }
@@ -402,7 +418,7 @@ function formatActionResponse(action, actionResult) {
     case 'cancel_appointment':
       if (!actionResult.cancelled) {
         return {
-          speak: `I'm sorry, I wasn't able to cancel that appointment. Let me connect you with our team directly — they'll sort it out for you right away.`,
+          speak: `I'm sorry, I wasn't able to cancel that in our system. Please hold for just a moment — I'm putting you through to one of our team members who will take care of this for you.`,
           action: 'transfer_to_human',
         };
       }
@@ -796,8 +812,10 @@ async function processTurn({
       history.push({ role: 'assistant', content: JSON.stringify(parsed) });
 
       if (nextAgent === 'human') {
+        const tSpeak = transferSpeak(patient);
+        history.push({ role: 'assistant', content: JSON.stringify({ ...parsed, speak: tSpeak }) });
         return {
-          speak: speak || "Of course — let me connect you with our team right away. One moment please.",
+          speak: tSpeak,
           action: 'transfer_to_human',
           history,
           currentAgent: 'human',
@@ -813,12 +831,9 @@ async function processTurn({
     const newUnclearTurns = unclearTurns + 1;
     if (newUnclearTurns >= 5) {
       console.log('[Agent] Stuck after 5 unclear turns — transferring to human');
-      history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-      const firstName = patient?.patientName?.split(' ')[0];
-      const fallbackSpeak = firstName
-        ? `Sorry ${firstName}, let me connect you with one of our team members who can help you directly — one moment please.`
-        : `Let me connect you with one of our team who can help you directly — one moment please.`;
-      return { speak: fallbackSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0, bookingReasonText: updatedBookingReasonText };
+      const tSpeak = transferSpeak(patient);
+      history.push({ role: 'assistant', content: JSON.stringify({ ...parsed, speak: tSpeak }) });
+      return { speak: tSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0, bookingReasonText: updatedBookingReasonText };
     }
 
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
@@ -827,9 +842,10 @@ async function processTurn({
 
   // ── 2. TRANSFER ACTIONS ───────────────────────────────────
   if (action === 'transfer_to_human') {
-    history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+    const tSpeak = transferSpeak(patient);
+    history.push({ role: 'assistant', content: JSON.stringify({ ...parsed, speak: tSpeak }) });
     return {
-      speak: speak || "Let me connect you with our team right away — please hold.",
+      speak: tSpeak,
       action: 'transfer_to_human',
       history,
       currentAgent: 'human',
@@ -895,7 +911,8 @@ async function processTurn({
     } catch (err) {
       console.error(`[Agent:${currentAgent}] Action error:`, err.message);
       // On any API/booking error → transfer to human with a warm apology
-      const errSpeak = `I'm really sorry — I wasn't able to complete that in the system. Let me connect you with our team so they can take care of this for you right away.`;
+      const tSpeak = transferSpeak(patient);
+      const errSpeak = `I'm really sorry about that — I wasn't able to complete that in our system. ${tSpeak}`;
       history.push({ role: 'assistant', content: JSON.stringify({ speak: errSpeak, action: 'transfer_to_human' }) });
       return { speak: errSpeak, action: 'transfer_to_human', history, currentAgent: 'human', bookingReasonText: updatedBookingReasonText };
     }
