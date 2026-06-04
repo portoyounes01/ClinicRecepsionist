@@ -332,21 +332,17 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     ws.on('open', () => {
       sonioxOpen = true;
       console.log('[Soniox] Connection open');
-      // Send config message first
+      // Send config message first — field names per Soniox RT WebSocket API
       ws.send(JSON.stringify({
-        api_key:          process.env.SONIOX_API_KEY,
-        model:            'stt-rt-v4',
-        language_hints:   ['pt', 'en'],   // pt-PT primary, English fallback
+        api_key:                process.env.SONIOX_API_KEY,
+        model:                  'stt-rt-preview',
+        audio_format:           'pcm_s16le',   // raw 16-bit signed little-endian PCM
+        sample_rate:            8000,
+        num_channels:           1,
+        language_hints:         ['pt', 'en'],  // Portuguese primary, English fallback
         enable_interim_results: true,
-        endpointing_sensitivity: 0.6,     // 0=least sensitive, 1=most (300ms equiv)
         context: {
           entries: contextWords.map(w => ({ value: w })),
-        },
-        audio_format: {
-          type:        'raw',
-          encoding:    'linear16',
-          sample_rate: 8000,
-          channels:    1,
         },
       }));
       // Flush queued audio
