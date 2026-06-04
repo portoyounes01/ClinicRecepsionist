@@ -419,14 +419,18 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
     if (isSpeaking) return;
 
-    // ── Silence-gap trigger (works for both interim and final) ────────
-    // Always update latest known text
-    lastInterimText = transcript;
-    pendingTranscript = transcript; // always the freshest full text
+    // ── Silence-gap trigger ───────────────────────────────────────────
+    // Only reset the debounce timer when the text GROWS (new words arrive).
+    // Soniox sometimes re-sends the same or shorter window — ignore those.
 
-    // Reset debounce on every new token — fires 600ms after last word
-    clearTimeout(processingTimer);
-    processingTimer = setTimeout(async () => {
+    if (transcript.length > (lastInterimText || '').length) {
+
+      lastInterimText = transcript;
+      pendingTranscript = transcript;
+
+      // Reset silence timer only when new words arrive
+      clearTimeout(processingTimer);
+      processingTimer = setTimeout(async () => {
       const userText = pendingTranscript.trim();
       pendingTranscript = '';
       processingTimer = null;
@@ -622,7 +626,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       isSpeaking = false;
     }
     }, 600); // 600ms silence gap — fires after patient stops talking
+    }  // end if (transcript grew)
   }  // end handleSonioxMessage
+
 
   // ── Telnyx WebSocket ──────────────────────
   ws.on('message', async (data) => {
