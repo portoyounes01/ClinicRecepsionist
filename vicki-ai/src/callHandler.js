@@ -469,6 +469,17 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         // Now speak the definitive API result (slots, booking/cancel confirmation, etc.)
         isSpeaking = true;
         await speakNow(result.speak, () => { isSpeaking = false; currentAbort = null; });
+      } else if (result.action === 'transfer_to_human' && result.speak) {
+        // TRANSFER: always abort the early AI speak and replay with the mandatory hold message.
+        // The early speak (onSpeakReady) may have fired with whatever the AI said —
+        // we must override it so the patient hears the proper professional hold phrase.
+        if (speakStarted && currentAbort) {
+          currentAbort('transfer'); // stop whatever was already playing
+          currentAbort = null;
+        }
+        if (speakStarted) await bridgePromise;
+        isSpeaking = true;
+        await speakNow(result.speak, () => { isSpeaking = false; currentAbort = null; });
       } else if (result.speak && !speakStarted && isSpeaking) {
         // No API action, bridge didn't fire — speak result directly
         await speakNow(result.speak, () => { isSpeaking = false; currentAbort = null; });
