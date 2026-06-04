@@ -475,10 +475,15 @@ function formatActionResponse(action, actionResult) {
           action: 'transfer_to_human',
         };
       }
-      return {
-        speak: `Perfeito — está tudo marcado! Esperamo-lo/a com muito gosto. Posso ajudar em mais alguma coisa?`,
-        action: 'none',
-      };
+      {
+        // Use the ACTUAL booked slot details for confirmation — never trust AI's memory of what it offered
+        const bs = actionResult.bookedSlot;
+        const confirmSpeak = bs
+          ? `Perfeito — está tudo marcado! Esperamo-lo/a ${bs.displayDate || bs.date} às ${bs.displayTime || bs.time} com ${bs.medicName}. Posso ajudar em mais alguma coisa?`
+          : `Perfeito — está tudo marcado! Esperamo-lo/a com muito gosto. Posso ajudar em mais alguma coisa?`;
+        return { speak: confirmSpeak, action: 'none' };
+      }
+
 
     case 'cancel_appointment':
       if (!actionResult.cancelled) {
@@ -656,23 +661,53 @@ async function executeAction(action, params, patient, callerNumber) {
       const patientForBooking = patientResolution.patient;
       if (!patientForBooking?.patientId) return { error: 'No patient on file — cannot book.' };
 
-      // Prefer server-side pendingSlots lookup to avoid AI copying truncated slotBase64
+      // ── Resolve the correct slot server-side ──────────────────────────────────────
+      // CRITICAL: AI sends chosenPeriod as 'morning'/'afternoon' (English) or 'manhã'/'tarde' (pt-PT).
+      // Slots are stored with period 'manhã'/'tarde'. Normalize both sides before matching.
       let resolvedBase64 = params.slotBase64;
+      let chosenSlot = null;
       if (params._pendingSlots && params._pendingSlots.length > 0) {
-        const chosen = params._pendingSlots.find(s => s.period === params.chosenPeriod)
-          || params._pendingSlots.find(s => s.slotBase64?.startsWith(params.slotBase64?.slice(0, 10)))
-          || params._pendingSlots[0];
-        if (chosen) resolvedBase64 = chosen.slotBase64;
+        const normPeriod = (p) => {
+          if (!p) return null;
+          const lp = p.toLowerCase();
+          if (lp === 'morning'  || lp === 'manhã' || lp === 'manha') return 'manhã';
+          if (lp === 'afternoon'|| lp === 'tarde')                    return 'tarde';
+          return lp; // pass through as-is
+        };
+        const wantedPeriod = normPeriod(params.chosenPeriod);
+
+        chosenSlot =
+          // 1. Match by normalized period
+          (wantedPeriod && params._pendingSlots.find(s => normPeriod(s.period) === wantedPeriod)) ||
+          // 2. Match by partial slotBase64 prefix (AI may truncate)
+          (params.slotBase64 && params._pendingSlots.find(s => s.slotBase64?.startsWith(params.slotBase64?.slice(0, 20)))) ||
+          // 3. Match by medicName if AI passed it
+          (params.medicName && params._pendingSlots.find(s => s.medicName?.toLowerCase().includes(params.medicName?.toLowerCase()))) ||
+          // 4. Last resort: first slot
+          params._pendingSlots[0];
+
+        if (chosenSlot) resolvedBase64 = chosenSlot.slotBase64;
+
+        // AUDIT LOG — every booking decision is traceable
+        console.log(`[Booking] Slot resolution:`);
+        console.log(`  chosenPeriod (AI)  : ${params.chosenPeriod || '(none)'}`);
+        console.log(`  wantedPeriod (norm): ${wantedPeriod || '(none)'}`);
+        console.log(`  slots available    : ${params._pendingSlots.map(s => `${s.period} ${s.medicName} ${s.time}`).join(' | ')}`);
+        console.log(`  chosen slot        : ${chosenSlot ? `${chosenSlot.period} ${chosenSlot.medicName} ${chosenSlot.time}` : 'NONE — fallback'}`);
       }
-      console.log(`[Booking] Reason for observation: ${params._bookingReasonText || '(none)'}`);
+
+      console.log(`[Booking] Patient: ${patientForBooking.patientName} (${patientForBooking.patientId})`);
+      console.log(`[Booking] Reason: ${params._bookingReasonText || '(none)'}`);
       const booked = await newsoft.bookAppointment({
         patientId:   patientForBooking.patientId,
         slotBase64:  resolvedBase64,
         motiveName:  params.motiveName || 'Consulta',
         observation: bookingObservation(params._bookingReasonText),
       });
+      console.log(`[Booking] ✅ Confirmed appointmentId: ${booked[0]?.appointmentId}`);
       return {
         appointmentId: booked[0]?.appointmentId,
+        bookedSlot:    chosenSlot,   // passed back so confirmation speaks correct doctor/time
         patient: patientForBooking,
         patientCreated: patientResolution.created,
         patientResolvedExisting: patientResolution.resolvedExisting,

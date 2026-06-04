@@ -8,6 +8,8 @@ const { processTurn, generateCallSummary } = require('./aiLogic');
 const cache         = require('./newsoftCache');
 const newsoft       = require('./newsoftApi');
 const { getPatientMemory, updateAfterCall, logCallOutcome } = require('./patientMemory');
+const telegram      = require('./telegramBot');
+
 
 // Soniox real-time WebSocket endpoint
 const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
@@ -577,7 +579,30 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       }
       // speakStarted && !actionFired → onSpeakReady TTS handles cleanup
 
+      // ── Persistent audit: Telegram notification on every booking/cancel ──
+      // Railway logs vanish on redeploy — Telegram gives a permanent record.
+      if (result.actionFired === 'book_appointment' && result.action !== 'transfer_to_human') {
+        const ptName = patient?.patientName || 'Novo paciente';
+        const msg = [
+          '✅ *MARCAÇÃO CONFIRMADA*',
+          `👤 Paciente: ${ptName} (ID: ${patient?.patientId || '?'})`,
+          `📱 Tel: ${callerNumber || '?'}`,
+          `🗣 Vicki disse: ${result.speak?.slice(0, 120) || '?'}`,
+        ].join('\n');
+        telegram.notify(msg).catch(() => {});
+      }
+      if (result.actionFired === 'cancel_appointment' && result.action !== 'transfer_to_human') {
+        const ptName = patient?.patientName || 'Desconhecido';
+        const msg = [
+          '❌ *CONSULTA CANCELADA*',
+          `👤 Paciente: ${ptName} (ID: ${patient?.patientId || '?'})`,
+          `📱 Tel: ${callerNumber || '?'}`,
+        ].join('\n');
+        telegram.notify(msg).catch(() => {});
+      }
+
       // ── AUTO-SPEAK: after silent inter-agent transfer, fire new agent immediately ──
+
       // Without this the new agent waits silently for patient to speak again.
       // We wait for the bridge phrase to finish, then trigger the new agent with
       // a synthetic "[continua]" so it opens naturally.
