@@ -10,7 +10,7 @@ const LOULE_DOCTOR_IDS = [1, 3, 11, 13, 25, 33, 36, 39];
 function buildPrompt(patient, clinicInfo, cachedDoctors, cachedMotives, memoryContext) {
   const patientCtx = patient
     ? `Patient: ${patient.patientName}. Usual doctor: ${patient.patientMedicName || 'none on file'}. (Internal ID ${patient.patientId} — NEVER say this.)`
-    : `Caller not registered. Offer to take their details and transfer to the team.`;
+    : `Caller not found by phone number. You can still complete booking: the system can create or resolve a Newsoft patient file before booking.`;
 
   const memoryBlock = memoryContext
     ? `\nPATIENT HISTORY (use this to personalise — suggest preferred doctor/time proactively):\n${memoryContext}\n`
@@ -83,6 +83,14 @@ BOOKING FLOW — follow this exactly, IN ORDER:
 5. Patient picks a slot ("morning" / "afternoon" / "the first" / specific time)
    → say "Perfect! Shall I go ahead and book the [chosen] slot for you?" — ONE TIME ONLY.
 6. Patient says yes / sure / ok / go ahead / please / book it / confirm:
+   → If caller is not found by phone number and you do NOT yet know their full name, ask:
+     "Of course — could I take your full name for the patient file?"
+     Do not ask this if the prompt already says the patient is known.
+   → If caller says they are already a patient but calling from a different number, ask for email or NIF
+     to find their existing file. Then call book_appointment with patientEmail or patientNif.
+   → If unknown caller gives full name after you asked for it, call book_appointment immediately using
+     the previously selected slot, with params.patientName. Do NOT ask for confirmation again.
+   → Do NOT ask for phone number unless the caller says the current caller ID is not their number.
    → Call book_appointment IMMEDIATELY. Do NOT ask again.
    → "I'd like to book" = still a request. "Yes" / "ok" / "sure" / "please" = CONFIRMATION → BOOK IT.
 7. After booking confirmed: confirm the details then ALWAYS ask:
@@ -96,6 +104,8 @@ STRICT RULES:
 - NEVER invent slot times. Only use times returned by check_slots.
 - NEVER call check_slots before you have the motiveId.
 - Whenever you call check_slots or book_appointment, include reasonText if the reason is known.
+- For unknown callers, NEVER transfer just because they are new. Collect the minimum patient detail and book.
+- For unknown callers who are probably already patients, prefer patientEmail or patientNif to resolve the existing file.
 - NEVER repeat "shall I book" or "just to confirm" more than once. Yes = book it.
 - If no slots found → say "There are no free slots in the next 4 weeks with that doctor. Want me to check any doctor?" then call check_slots with NO medicId.
 - If patient says "closer", "sooner", "earlier", "this week", "next week", "any doctor", "doesn't matter" after slots were offered:
@@ -133,6 +143,10 @@ RESPONSE FORMAT (valid JSON only):
     "slotBase64": "...",
     "motiveName": "...",
     "reasonText": "cleaning",
+    "patientName": "Full Name",
+    "patientEmail": "patient@example.com",
+    "patientNif": "123456789",
+    "patientPhoneNumber": "912345678",
     "searchDirection": "earlier|later"
   }
 }`;

@@ -23,31 +23,49 @@ function clinicParams() {
   return { ClinicNif: CLINIC_NIF, ClinicId: CLINIC_ID, CostCenterId: COST_CENTER_ID };
 }
 
+function normalizePhoneNumber(phoneNumber) {
+  if (!phoneNumber) return null;
+  const digits = String(phoneNumber).replace(/\D/g, '');
+  if (digits.startsWith('351') && digits.length === 12) return digits.slice(3);
+  return digits || null;
+}
+
+function compactObject(obj) {
+  return Object.fromEntries(Object.entries(obj).filter(([, value]) => value !== undefined && value !== null && value !== ''));
+}
+
+async function getPatientByParams(params, label = 'lookup') {
+  const token = await cache.getToken();
+  const res = await axios.get(`${BASE_URL}/patient`, {
+    headers: authHeader(token),
+    params:  { ...clinicParams(), ...compactObject(params) },
+  });
+  if (!res.data || (Array.isArray(res.data) && res.data.length === 0)) return null;
+  const patient = Array.isArray(res.data) ? res.data[0] : res.data;
+  if (patient?.patientId) {
+    console.log(`[Newsoft] Patient found by ${label}:`, patient.patientName);
+    return patient;
+  }
+  return null;
+}
+
 // ─────────────────────────────────────────────
 // PATIENT: Look up patient by phone number
 // ─────────────────────────────────────────────
 async function getPatientByPhone(phoneNumber) {
-  const token = await cache.getToken();
-
   const formats = [
     phoneNumber,
     phoneNumber.replace('+351', ''),
     phoneNumber.replace('+', ''),
     '00' + phoneNumber.replace('+', ''),
+    normalizePhoneNumber(phoneNumber),
   ];
 
-  for (const fmt of formats) {
+  for (const fmt of [...new Set(formats.filter(Boolean))]) {
     try {
       console.log(`[Newsoft] Trying phone format: ${fmt}`);
-      const res = await axios.get(`${BASE_URL}/patient`, {
-        headers: authHeader(token),
-        params:  { ...clinicParams(), PatientPhoneNumber: fmt },
-      });
-      if (res.data && (res.data.patientId || (Array.isArray(res.data) && res.data.length > 0))) {
-        const patient = Array.isArray(res.data) ? res.data[0] : res.data;
-        console.log(`[Newsoft] Patient found with format "${fmt}":`, patient.patientName);
-        return patient;
-      }
+      const patient = await getPatientByParams({ PatientPhoneNumber: fmt }, `phone format "${fmt}"`);
+      if (patient) return patient;
     } catch (err) {
       console.error(`[Newsoft] Format ${fmt} failed:`, err.response?.data || err.message);
     }
@@ -55,6 +73,74 @@ async function getPatientByPhone(phoneNumber) {
 
   console.log('[Newsoft] No patient found for any phone format');
   return null;
+}
+
+async function getPatientByIdentity({ patientEmail, patientNif }) {
+  if (patientNif) {
+    try {
+      const patient = await getPatientByParams({ PatientNIF: patientNif }, 'NIF');
+      if (patient) return patient;
+    } catch (err) {
+      console.error('[Newsoft] NIF lookup failed:', err.response?.data || err.message);
+    }
+  }
+
+  if (patientEmail) {
+    try {
+      const patient = await getPatientByParams({ PatientEmail: patientEmail }, 'email');
+      if (patient) return patient;
+    } catch (err) {
+      console.error('[Newsoft] Email lookup failed:', err.response?.data || err.message);
+    }
+  }
+
+  return null;
+}
+
+async function getPatientById(patientId) {
+  if (!patientId) return null;
+  try {
+    return await getPatientByParams({ PatientId: patientId }, `id ${patientId}`);
+  } catch (err) {
+    console.error('[Newsoft] PatientId lookup failed:', err.response?.data || err.message);
+    return null;
+  }
+}
+
+async function createOrUpdatePatient({ patientName, phoneNumber, patientEmail, patientNif }) {
+  const token = await cache.getToken();
+  const normalizedPhone = normalizePhoneNumber(phoneNumber);
+
+  const body = compactObject({
+    clinicNif:          CLINIC_NIF,
+    clinicId:           CLINIC_ID,
+    costCenterId:       COST_CENTER_ID,
+    patientName,
+    patientEmail,
+    patientPhoneNumber: normalizedPhone,
+    patientNif,
+    updatePatient:      true,
+  });
+
+  console.log('[Newsoft] createOrUpdatePatient body:', JSON.stringify({
+    ...body,
+    patientNif: body.patientNif ? '[set]' : undefined,
+  }));
+
+  const res = await axios.post(`${BASE_URL}/patient`, body, { headers: authHeader(token) });
+  const patientId = Array.isArray(res.data) ? res.data[0]?.patientId : res.data?.patientId;
+  const isNewPatient = Array.isArray(res.data) ? res.data[0]?.isNewPatient : res.data?.isNewPatient;
+  if (!patientId) throw new Error(`Newsoft did not return patientId: ${JSON.stringify(res.data)}`);
+
+  const patient = await getPatientById(patientId);
+  return patient ? { ...patient, isNewPatient } : {
+    patientId,
+    patientName,
+    patientEmail,
+    patientNif,
+    patientPhoneNumber: normalizedPhone,
+    isNewPatient,
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -159,6 +245,8 @@ async function cancelAppointment({ appointmentId, reason }) {
 
 module.exports = {
   getPatientByPhone,
+  getPatientByIdentity,
+  createOrUpdatePatient,
   getDoctors:             cache.getDoctors,   // re-export from cache
   getMotives:             cache.getMotives,   // re-export from cache
   getAvailableSlots,

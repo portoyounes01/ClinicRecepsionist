@@ -414,6 +414,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         patientMemory,
         lastOfferedDate,
         bookingReasonText,
+        callerNumber,
       });
 
       conversationHistory = result.history;
@@ -423,6 +424,11 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       if (result.pendingAppts   && result.pendingAppts.length)  pendingAppts  = result.pendingAppts;
       if (result.lastOfferedDate !== undefined) lastOfferedDate = result.lastOfferedDate;
       if (result.bookingReasonText !== undefined) bookingReasonText = result.bookingReasonText;
+      if (result.patient?.patientId) {
+        patient = result.patient;
+        patientMemory = getPatientMemory(patient.patientId);
+        console.log(`[Newsoft] Active patient set: ${patient.patientName} (ID: ${patient.patientId})`);
+      }
 
       // ── Speak the response ───────────────────────────────────────────
       if (result.actionFired && result.speak) {

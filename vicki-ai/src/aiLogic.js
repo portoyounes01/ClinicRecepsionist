@@ -180,6 +180,72 @@ function bookingObservation(reasonText) {
     : 'Marcação via Vicki AI';
 }
 
+function normalizePatientName(value) {
+  if (!value || typeof value !== 'string') return null;
+  const cleaned = value
+    .replace(/\s+/g, ' ')
+    .replace(/^["']|["']$/g, '')
+    .trim();
+  if (!cleaned || cleaned.length < 2) return null;
+  if (/^(yes|yeah|ok|okay|sure|please|book it|confirm|go ahead)$/i.test(cleaned)) return null;
+  return cleaned.length > 120 ? cleaned.slice(0, 120).trim() : cleaned;
+}
+
+function normalizePatientEmail(value) {
+  if (!value || typeof value !== 'string') return null;
+  const match = value.trim().match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match ? match[0].toLowerCase() : null;
+}
+
+function normalizePatientNif(value) {
+  if (!value) return null;
+  const digits = String(value).replace(/\D/g, '');
+  return digits.length >= 8 && digits.length <= 10 ? digits : null;
+}
+
+async function resolvePatientForBooking({ patient, params, callerNumber }) {
+  if (patient?.patientId) return { patient, created: false, resolvedExisting: true };
+
+  const patientEmail = normalizePatientEmail(params.patientEmail || params.email);
+  const patientNif = normalizePatientNif(params.patientNif || params.nif || params.patientNIF);
+  const patientName = normalizePatientName(params.patientName || params.fullName || params.name);
+  const patientPhoneNumber = params.patientPhoneNumber || params.phoneNumber || callerNumber;
+
+  if (patientEmail || patientNif) {
+    const existing = await newsoft.getPatientByIdentity({ patientEmail, patientNif });
+    if (existing?.patientId) {
+      console.log(`[Booking] Resolved existing patient ${existing.patientId} before booking`);
+      return { patient: existing, created: false, resolvedExisting: true };
+    }
+  }
+
+  if (!patientName) {
+    return {
+      needsPatientDetails: true,
+      missing: 'patientName',
+      speak: "I can book that for you — could I take your full name for the patient file?",
+    };
+  }
+
+  if (!patientPhoneNumber && !patientEmail && !patientNif) {
+    return {
+      needsPatientDetails: true,
+      missing: 'patientPhoneNumber',
+      speak: "I can book that for you — could I take your phone number for the patient file?",
+    };
+  }
+
+  const createdPatient = await newsoft.createOrUpdatePatient({
+    patientName,
+    phoneNumber: patientPhoneNumber,
+    patientEmail,
+    patientNif,
+  });
+
+  console.log(`[Booking] ${createdPatient.isNewPatient ? 'Created' : 'Resolved'} patient for booking: ${createdPatient.patientId}`);
+  return { patient: createdPatient, created: !!createdPatient.isNewPatient, resolvedExisting: !createdPatient.isNewPatient };
+}
+
 // ─────────────────────────────────────────────
 // PROGRAMMATIC RESPONSE FORMATTER
 // Converts raw Newsoft API data into spoken text.
@@ -256,6 +322,18 @@ function formatActionResponse(action, actionResult) {
     }
 
     case 'book_appointment':
+      if (actionResult.needsPatientDetails) {
+        return {
+          speak: actionResult.speak || "I can book that for you — could I take your full name for the patient file?",
+          action: 'none',
+        };
+      }
+      if (actionResult.error || !actionResult.appointmentId) {
+        return {
+          speak: "I'm sorry, I couldn't complete the booking in the system. Let me connect you with the team so they can finish it for you.",
+          action: 'transfer_to_human',
+        };
+      }
       return {
         speak: `Perfect — you're all booked! We'll see you then. Is there anything else I can help you with?`,
         action: 'none',
@@ -282,7 +360,7 @@ function formatActionResponse(action, actionResult) {
 // NEWSOFT API EXECUTOR
 // Runs the action chosen by the current agent.
 // ─────────────────────────────────────────────
-async function executeAction(action, params, patient) {
+async function executeAction(action, params, patient, callerNumber) {
   switch (action) {
 
     case 'check_slots': {
@@ -399,7 +477,12 @@ async function executeAction(action, params, patient) {
     }
 
     case 'book_appointment': {
-      if (!patient) return { error: 'No patient on file — cannot book.' };
+      const patientResolution = await resolvePatientForBooking({ patient, params, callerNumber });
+      if (patientResolution.needsPatientDetails) return patientResolution;
+
+      const patientForBooking = patientResolution.patient;
+      if (!patientForBooking?.patientId) return { error: 'No patient on file — cannot book.' };
+
       // Prefer server-side pendingSlots lookup to avoid AI copying truncated slotBase64
       let resolvedBase64 = params.slotBase64;
       if (params._pendingSlots && params._pendingSlots.length > 0) {
@@ -410,12 +493,17 @@ async function executeAction(action, params, patient) {
       }
       console.log(`[Booking] Reason for observation: ${params._bookingReasonText || '(none)'}`);
       const booked = await newsoft.bookAppointment({
-        patientId:   patient.patientId,
+        patientId:   patientForBooking.patientId,
         slotBase64:  resolvedBase64,
         motiveName:  params.motiveName || 'Consulta',
         observation: bookingObservation(params._bookingReasonText),
       });
-      return { appointmentId: booked[0]?.appointmentId };
+      return {
+        appointmentId: booked[0]?.appointmentId,
+        patient: patientForBooking,
+        patientCreated: patientResolution.created,
+        patientResolvedExisting: patientResolution.resolvedExisting,
+      };
     }
 
     case 'cancel_appointment': {
@@ -542,6 +630,7 @@ async function processTurn({
   patientMemory  = null,
   lastOfferedDate = null,   // date of last slot offered — skip past it on next search
   bookingReasonText = null,
+  callerNumber = null,
 }) {
   history.push({ role: 'user', content: userText });
 
@@ -701,7 +790,7 @@ async function processTurn({
                 _bookingReasonText: updatedBookingReasonText,
               }
             : params;
-      const actionResult = await executeAction(action, enrichedParams, patient);
+      const actionResult = await executeAction(action, enrichedParams, patient, callerNumber);
       if (actionResult) {
         const formatted = formatActionResponse(action, actionResult);
         if (formatted) {
@@ -714,10 +803,10 @@ async function processTurn({
           if (formatted._appointmentsContext) {
             history.push({ role: 'system', content: `Patient appointments:\n${formatted._appointmentsContext}\n\nUse the [ref:ID] values server-side only for cancel_appointment. Never reveal IDs to the patient.` });
           }
-          history.push({ role: 'assistant', content: JSON.stringify({ speak: formatted.speak, action: 'none', params: {} }) });
+          history.push({ role: 'assistant', content: JSON.stringify({ speak: formatted.speak, action: formatted.action || 'none', params: {} }) });
           return {
             speak:           formatted.speak,
-            action:          'none',
+            action:          formatted.action || 'none',
             actionFired:     action,
             history,
             currentAgent:    nextAgent,
@@ -725,6 +814,7 @@ async function processTurn({
             pendingAppts:    formatted.pendingAppointments,
             lastOfferedDate: actionResult.lastOfferedDate ?? lastOfferedDate,
             bookingReasonText: updatedBookingReasonText,
+            patient:         actionResult.patient,
           };
         }
       }
