@@ -402,12 +402,12 @@ function formatActionResponse(action, actionResult) {
     case 'cancel_appointment':
       if (!actionResult.cancelled) {
         return {
-          speak: `I'm sorry, I wasn't able to cancel that appointment. Please call us directly and we'll sort it out for you.`,
-          action: 'none',
+          speak: `I'm sorry, I wasn't able to cancel that appointment. Let me connect you with our team directly — they'll sort it out for you right away.`,
+          action: 'transfer_to_human',
         };
       }
       return {
-        speak: `Done — that's cancelled. Would you like me to find you a new slot?`,
+        speak: `Done, that's cancelled. I know things come up — would you like me to find you another slot so you don't lose your place?`,
         action: 'none',
       };
 
@@ -894,13 +894,10 @@ async function processTurn({
       }
     } catch (err) {
       console.error(`[Agent:${currentAgent}] Action error:`, err.message);
-      // Stay in current agent — don't transfer to human just because the API failed
-      // Give a helpful spoken message so the patient knows what happened
-      const errSpeak = currentAgent === 'booking'
-        ? "I'm sorry, I had a problem reaching the scheduling system. Could you try saying the doctor's name and reason again?"
-        : "I'm having a small technical issue — please hold a moment and I'll try again.";
-      history.push({ role: 'assistant', content: JSON.stringify({ speak: errSpeak, action: 'none' }) });
-      return { speak: errSpeak, action: 'none', history, currentAgent, bookingReasonText: updatedBookingReasonText };
+      // On any API/booking error → transfer to human with a warm apology
+      const errSpeak = `I'm really sorry — I wasn't able to complete that in the system. Let me connect you with our team so they can take care of this for you right away.`;
+      history.push({ role: 'assistant', content: JSON.stringify({ speak: errSpeak, action: 'transfer_to_human' }) });
+      return { speak: errSpeak, action: 'transfer_to_human', history, currentAgent: 'human', bookingReasonText: updatedBookingReasonText };
     }
   } else {
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
