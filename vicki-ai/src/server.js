@@ -54,6 +54,7 @@ app.post('/telnyx/inbound', (req, res) => {
   const status  = req.body.CallStatus || 'unknown';
 
   console.log(`[Telnyx] Inbound call | From: ${from} | To: ${to} | Status: ${status} | SID: ${callSid}`);
+  console.log(`[Telnyx] Inbound raw body:`, JSON.stringify(req.body));
 
   const host  = req.headers['x-forwarded-host'] || req.headers.host;
   const wsUrl = `wss://${host}/media`;
@@ -79,7 +80,12 @@ app.post('/telnyx/inbound', (req, res) => {
 // KEEP-ALIVE — Called every 55s to hold the line
 // ─────────────────────────────────────────────
 app.post('/telnyx/keep-alive', (req, res) => {
-  const callSid = req.body.CallSid;
+  // Telnyx may send the call identifier under different names depending on API version
+  const callSid = req.body.CallSid
+               || req.body.call_control_id
+               || req.body.callSid
+               || req.body.CallControlId
+               || null;
   const host    = req.headers['x-forwarded-host'] || req.headers.host;
   const baseUrl = `https://${host}`;
 
@@ -101,9 +107,10 @@ app.post('/telnyx/keep-alive', (req, res) => {
   }
 
   console.log(`[Telnyx] Keep-alive → Extend session | SID: ${callSid || 'unknown'}`);
+  console.log(`[Telnyx] Keep-alive raw body:`, JSON.stringify(req.body));
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Pause length="12"/>
+  <Pause length="10"/>
   <Redirect method="POST">${baseUrl}/telnyx/keep-alive</Redirect>
 </Response>`);
 
@@ -142,7 +149,7 @@ wss.on('connection', (ws, req) => {
   ws.on('close', () => clearInterval(pingInterval));
   ws.on('pong', () => {}); // acknowledge pong
 
-  handleCallStream(ws, req, hangupCalls);
+  handleCallStream(ws, req, hangupCalls, transferCalls);
 });
 
 const { warmUp }         = require('./newsoftCache');
