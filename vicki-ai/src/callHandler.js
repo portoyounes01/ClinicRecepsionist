@@ -691,13 +691,13 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
               const firstName = patient?.patientName?.split(' ')[0];
               let greeting;
               if (firstName && patientMemory?.totalCalls > 0) {
-                // Returning patient — skip intro, go warm and personal
-                greeting = `Hi ${firstName}! Great to hear from you again — how can I help today?`;
+                // Paciente recorrente — vai direto ao assunto, caloroso e pessoal
+                greeting = `Olá ${firstName}! Que bom ouvir a sua voz — em que posso ajudar hoje?`;
               } else if (firstName) {
-                // First time or unknown memory
-                greeting = `Hi ${firstName}! I'm Vicki, Instituto Vilas Boas's virtual assistant. How can I help you today?`;
+                // Primeiro contacto ou memória desconhecida
+                greeting = `Olá ${firstName}! Sou a Vicki, a assistente virtual do Instituto Vilas Boas. Em que posso ajudar?`;
               } else {
-                greeting = `Hello! I'm Vicki, Instituto Vilas Boas's virtual assistant. How can I help you today?`;
+                greeting = `Olá! Sou a Vicki, a assistente virtual do Instituto Vilas Boas. Em que posso ajudar?`;
               }
 
               isSpeaking = true;
@@ -707,7 +707,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
               console.error('[Startup] Error:', err.message);
               isSpeaking = true;
               speakToCaller(
-                "Hello! I'm Vicki, Instituto Vilas Boas's virtual assistant. How can I help you today?",
+                "Olá! Sou a Vicki, a assistente virtual do Instituto Vilas Boas. Em que posso ajudar?",
                 () => { isSpeaking = false; currentAbort = null; }
               );
             }

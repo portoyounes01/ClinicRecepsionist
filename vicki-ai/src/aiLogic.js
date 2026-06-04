@@ -36,9 +36,9 @@ function transferSpeak(patient) {
   const firstName = patient?.patientName?.split(' ')[0];
   const name = firstName ? `, ${firstName}` : '';
   const phrases = [
-    `Please hold for just a moment${name} — I'm connecting you with one of our team members who will be happy to assist you.`,
-    `Of course${name} — please hold on just a second while I transfer you to one of our colleagues who can help you with that.`,
-    `Absolutely${name} — just one moment please while I put you through to someone from our team who can take care of this for you.`,
+    `Um momento${name} — vou ligá-lo/a com um membro da nossa equipa que terá todo o gosto em ajudar.`,
+    `Claro${name} — só um instante enquanto o/a transfiro para um colega nosso que pode tratar disto.`,
+    `Com certeza${name} — um momento enquanto o/a passo para alguém da nossa equipa que cuida disto agora mesmo.`,
   ];
   return phrases[Math.floor(Date.now() / 1000) % phrases.length];
 }
@@ -98,32 +98,25 @@ function humanSlot(isoString) {
   const slotDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const diffDays = Math.round((slotDay - today) / 86400000);
 
-  const weekday = date.toLocaleDateString('en-GB', { weekday: 'long' });
-  const ordinal = d => {
-    const v = d % 100;
-    if (v >= 11 && v <= 13) return `${d}th`;
-    return `${d}${ ['th','st','nd','rd'][d % 10] || 'th' }`;
-  };
-  const monthName = date.toLocaleDateString('en-GB', { month: 'long' });
+  const weekday = date.toLocaleDateString('pt-PT', { weekday: 'long' });
+  const monthName = date.toLocaleDateString('pt-PT', { month: 'long' });
 
   let dayName;
-  if      (diffDays === 0) dayName = 'today';
-  else if (diffDays === 1) dayName = 'tomorrow';
-  else if (diffDays <= 6)  dayName = `this ${weekday}`;
+  if      (diffDays === 0) dayName = 'hoje';
+  else if (diffDays === 1) dayName = 'amanhã';
+  else if (diffDays <= 6)  dayName = `esta ${weekday}`;
   else {
-    // 7+ days — ALWAYS include the actual date, never just "next Monday"
-    dayName = `${weekday} the ${ordinal(date.getDate())} of ${monthName}`;
+    // 7+ dias — inclui SEMPRE a data real
+    dayName = `${weekday}, dia ${date.getDate()} de ${monthName}`;
   }
 
   const h   = date.getHours();
   const m   = date.getMinutes();
-  const period = h < 12 ? 'morning' : h < 18 ? 'afternoon' : 'evening';
-  // 12h numeric format with am/pm — ElevenLabs reads '11:30am' naturally,
-  // avoids '17:00' being spoken as 'seventeen hundred'
-  const h12 = h % 12 || 12;
+  const period = h < 12 ? 'manhã' : h < 18 ? 'tarde' : 'noite';
+  // Formato 24h pt-PT — ElevenLabs lê '14:30' naturalmente em português
   const timeStr = m === 0
-    ? `${h12}${h < 12 ? 'am' : 'pm'}`
-    : `${h12}:${String(m).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`;
+    ? `${String(h).padStart(2,'0')}h`
+    : `${String(h).padStart(2,'0')}h${String(m).padStart(2,'0')}`;
 
   return { dayName, timeStr, period };
 }
@@ -131,7 +124,7 @@ function humanSlot(isoString) {
 // Format a slot for speech: just the time + period, no day
 function slotTime(isoString) {
   const t = humanSlot(isoString);
-  return `${t.timeStr} in the ${t.period}`;
+  return `às ${t.timeStr} da ${t.period}`;
 }
 // Day label only
 function slotDay(isoString) {
@@ -284,14 +277,14 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
     console.warn('[Guard] check_slots blocked — no motiveId. Forcing reason question.');
     return {
       action: 'none',
-      speak: speak?.toLowerCase().includes('reason') || speak?.toLowerCase().includes('visit')
-        ? speak  // AI already asked — keep it
-        : "Before I check availability, could you tell me the reason for your visit?",
+      speak: speak?.toLowerCase().includes('motivo') || speak?.toLowerCase().includes('consulta')
+        ? speak  // AI já perguntou — mantém
+        : "Antes de verificar a disponibilidade, pode dizer-me o motivo da sua consulta?",
       params,
     };
   }
 
-  // ── If motiveId was inferred from context, inject it back into params ────────
+  // ── Se motiveId foi inferido do contexto, injeta nos params ────────
   if (action === 'check_slots' && motiveId && !params.motiveId) {
     console.log(`[Guard] motiveId injected from context: "${motiveId}" (reason: "${reasonText}")`);
     return { action, speak, params: { ...params, motiveId, reasonText } };
@@ -300,23 +293,23 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
   if (action === 'none' && askedDoctorPreference && isAffirmationOnly(userText) && motiveId) {
     return {
       action: 'check_slots',
-      speak: "Perfect — I'll check the first available appointment for you.",
+      speak: "Perfeito — já verifico o primeiro slot disponível para si.",
       params: { ...params, motiveId, reasonText },
     };
   }
 
-  const asksForUnseenSlotChoice = /\bwhich one\b.*\b(morning|afternoon)\b|\bmorning or (?:the )?afternoon\b/i.test(speak || '');
+  const asksForUnseenSlotChoice = /\b(manhã|tarde|qual prefere|morning|afternoon)\b/i.test(speak || '');
   if (action === 'none' && asksForUnseenSlotChoice) {
     if (motiveId) {
       return {
         action: 'check_slots',
-        speak: "Let me check the available times for you.",
+        speak: "Deixe-me verificar os horários disponíveis para si.",
         params: { ...params, motiveId, reasonText },
       };
     }
     return {
       action: 'none',
-      speak: "Could you tell me the reason for the appointment first?",
+      speak: "Pode dizer-me primeiro o motivo da consulta?",
       params,
     };
   }
@@ -367,7 +360,7 @@ async function resolvePatientForBooking({ patient, params, callerNumber }) {
     return {
       needsPatientDetails: true,
       missing: 'patientName',
-      speak: "I can book that for you — could I take your full name for the patient file?",
+      speak: "Consigo marcar — pode dizer-me o seu nome completo para o ficheiro do paciente?",
     };
   }
 
@@ -375,7 +368,7 @@ async function resolvePatientForBooking({ patient, params, callerNumber }) {
     return {
       needsPatientDetails: true,
       missing: 'patientPhoneNumber',
-      speak: "I can book that for you — could I take your phone number for the patient file?",
+      speak: "Consigo marcar — pode dizer-me o seu número de telemóvel para o ficheiro?",
     };
   }
 
@@ -403,12 +396,12 @@ function formatActionResponse(action, actionResult) {
       if (!slots.length) {
         if (actionResult.searchDirection === 'earlier') {
           return {
-            speak: "I don't see anything earlier than that right now. The last slot I offered is still the earliest I can find. Would you like that one?",
+            speak: "Neste momento não vejo nada mais cedo. O último slot que ofereci continua a ser o mais próximo que encontro. Quer ficar com esse?",
             action: 'none',
           };
         }
         return {
-          speak: "I'm sorry, there are no free slots with that doctor in the next 4 weeks. Would you like me to check a different doctor?",
+          speak: "Peço desculpa, não há vagas livres com esse médico nas próximas 4 semanas. Quer que verifique com outro médico?",
           action: 'none',
         };
       }
@@ -421,7 +414,7 @@ function formatActionResponse(action, actionResult) {
       if (options.length === 1) {
         const s = options[0];
         const t = humanSlot(s.date + 'T' + s.time);
-        speak = `I've got ${t.dayName} at ${t.timeStr} with ${s.medicName} — does that work for you?`;
+        speak = `I have a slot ${t.dayName} at ${t.timeStr} with ${s.medicName} — does that work for you?`;
       } else {
         const [am, pm] = options;
         const amT = humanSlot(am.date + 'T' + am.time);
@@ -429,10 +422,10 @@ function formatActionResponse(action, actionResult) {
         const day = amT.dayName === pmT.dayName ? amT.dayName : `${amT.dayName} or ${pmT.dayName}`;
 
         if (am.medicName === pm.medicName) {
-          // Same doctor — don't repeat name twice
-          speak = `I've got ${day} with ${am.medicName} — ${amT.timeStr} in the morning or ${pmT.timeStr} in the afternoon. Which works better for you?`;
+          // Same doctor — don't repeat the name twice
+          speak = `I have ${day} with ${am.medicName} — ${amT.timeStr} in the morning or ${pmT.timeStr} in the afternoon. Which suits you better?`;
         } else {
-          speak = `I've got ${day} — ${amT.timeStr} with ${am.medicName}, or ${pmT.timeStr} with ${pm.medicName}. Which works better for you?`;
+          speak = `I have ${day} — ${amT.timeStr} with ${am.medicName}, or ${pmT.timeStr} with ${pm.medicName}. Which do you prefer?`;
         }
       }
 
@@ -468,30 +461,30 @@ function formatActionResponse(action, actionResult) {
     case 'book_appointment':
       if (actionResult.needsPatientDetails) {
         return {
-          speak: actionResult.speak || "I can book that for you — could I take your full name for the patient file?",
+          speak: actionResult.speak || "Consigo marcar — pode dizer-me o seu nome completo para o ficheiro do paciente?",
           action: 'none',
         };
       }
       if (actionResult.error || !actionResult.appointmentId) {
         return {
-          speak: "I'm sorry, I wasn't able to complete that booking in our system. Please hold for just a moment — I'm connecting you with one of our team members who will sort this out for you right away.",
+          speak: "Peço desculpa, não foi possível concluir a marcação no nosso sistema. Um momento — vou ligá-lo/a com um membro da nossa equipa que resolve isto imediatamente.",
           action: 'transfer_to_human',
         };
       }
       return {
-        speak: `Perfect — you're all booked! We'll see you then. Is there anything else I can help you with?`,
+        speak: `Perfeito — está tudo marcado! Esperamo-lo/a com muito gosto. Posso ajudar em mais alguma coisa?`,
         action: 'none',
       };
 
     case 'cancel_appointment':
       if (!actionResult.cancelled) {
         return {
-          speak: `I'm sorry, I wasn't able to cancel that in our system. Please hold for just a moment — I'm putting you through to one of our team members who will take care of this for you.`,
+          speak: `Peço desculpa, não foi possível cancelar no nosso sistema. Um momento — vou ligá-lo/a com alguém da nossa equipa que trata disto para si.`,
           action: 'transfer_to_human',
         };
       }
       return {
-        speak: `Done, that's cancelled. I know things come up — would you like me to find you another slot so you don't lose your place?`,
+        speak: `Pronto, está cancelado. Sei que às vezes surgem imprevistos — quer que encontre outra vaga para não perder o seu lugar?`,
         action: 'none',
       };
 
@@ -612,7 +605,7 @@ async function executeAction(action, params, patient, callerNumber) {
         const t   = humanSlot(iso);
         return {
           appointmentId: a.appointmentId,
-          display: `${t.dayName} at ${t.timeStr} in the ${t.period} with ${a.medicName || a.medicShortName}`,
+          display: `${t.dayName} às ${t.timeStr} da ${t.period} com ${a.medicName || a.medicShortName}`,
           doctor:  a.medicName || a.medicShortName,
           date:    a.appointmentDateBegin || a.appointmentDate,
         };
