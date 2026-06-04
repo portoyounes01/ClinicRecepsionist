@@ -12,6 +12,7 @@
 const OpenAI = require('openai').default;
 const newsoft = require('./newsoftApi');
 const { buildMemoryContext } = require('./patientMemory');
+const { sendBookingConfirmation, sendCancellationConfirmation } = require('./smsService');
 
 const routerAgent       = require('./agents/routerAgent');
 const bookingAgent      = require('./agents/bookingAgent');
@@ -796,6 +797,21 @@ async function executeAction(action, params, patient, callerNumber, history = []
         observation: bookingObservation(params._bookingReasonText),
       });
       console.log(`[Booking] ✅ Confirmed appointmentId: ${booked[0]?.appointmentId}`);
+
+      // Fire-and-forget SMS confirmation (don't block the call)
+      if (chosenSlot && patientForBooking) {
+        const smsPhone = callerNumber || patientForBooking.patientPhoneNumber;
+        sendBookingConfirmation({
+          patientName: patientForBooking.patientName,
+          phoneNumber: smsPhone,
+          displayDate: chosenSlot.displayDate,
+          displayTime: chosenSlot.displayTime,
+          medicName:   chosenSlot.medicName,
+          date:        chosenSlot.date,
+          time:        chosenSlot.time,
+        }).catch(err => console.error('[SMS] Background send failed:', err.message));
+      }
+
       return {
         appointmentId: booked[0]?.appointmentId,
         bookedSlot:    chosenSlot,   // passed back so confirmation speaks correct doctor/time
@@ -820,6 +836,19 @@ async function executeAction(action, params, patient, callerNumber, history = []
       if (!result?.appointmentCanceled) {
         return { cancelled: false, error: 'Newsoft did not confirm cancellation' };
       }
+
+      // Fire-and-forget SMS cancellation notification
+      if (patient) {
+        const cancelledAppt = params._pendingAppts?.find(a => String(a.appointmentId) === String(resolvedId));
+        sendCancellationConfirmation({
+          patientName: patient.patientName,
+          phoneNumber: callerNumber || patient.patientPhoneNumber,
+          displayDate: cancelledAppt?.displayDate,
+          displayTime: cancelledAppt?.displayTime,
+          medicName:   cancelledAppt?.medicName || cancelledAppt?.medicShortName,
+        }).catch(err => console.error('[SMS] Cancel SMS failed:', err.message));
+      }
+
       return { cancelled: true };
     }
 
