@@ -942,7 +942,39 @@ async function processTurn({
 
   let parsed;
   try {
-    parsed = JSON.parse(fullText);
+    // Robust parser — AI sometimes returns two JSON objects concatenated (e.g. a reasoning step + final response).
+    // Strategy: find all top-level JSON objects in the text, take the LAST complete one that has a 'speak' field.
+    let jsonText = fullText.trim();
+
+    // Try direct parse first (happy path)
+    try {
+      parsed = JSON.parse(jsonText);
+    } catch (_) {
+      // Extract all {...} top-level blocks and try each from last to first
+      const blocks = [];
+      let depth = 0, start = -1;
+      for (let i = 0; i < jsonText.length; i++) {
+        if (jsonText[i] === '{') { if (depth === 0) start = i; depth++; }
+        else if (jsonText[i] === '}') {
+          depth--;
+          if (depth === 0 && start !== -1) { blocks.push(jsonText.slice(start, i + 1)); start = -1; }
+        }
+      }
+      // Try each block from last to first — take the first that parses and has 'action'
+      let found = null;
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        try {
+          const candidate = JSON.parse(blocks[i]);
+          if (candidate.action !== undefined) { found = candidate; break; }
+        } catch (_) {}
+      }
+      if (found) {
+        parsed = found;
+        console.warn(`[AI] Double-JSON recovered — took block ${blocks.length} of ${blocks.length}`);
+      } else {
+        throw new Error('No valid JSON block with action found');
+      }
+    }
   } catch (err) {
     console.error(
       `[AI] JSON parse failed | model=${LIVE_AGENT_MODEL} agent=${currentAgent} ` +
@@ -990,6 +1022,35 @@ async function processTurn({
       action = 'book_appointment';
       params = { ...params, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText };
       parsed.action = action;
+      parsed.params = params;
+    }
+  }
+
+  // ── HARD GUARD: appointments agent MUST call get_appointments before speaking any data ──
+  // This prevents the AI from hallucinating appointment info from call memory.
+  // Rule: if appointments agent tries to speak (action=none) but we have no real API data
+  // yet (pendingAppts is empty), force get_appointments first.
+  if (
+    currentAgent === 'appointments' &&
+    action === 'none' &&
+    !isSyntheticTurn &&
+    pendingAppts?.length === 0
+  ) {
+    // Check if get_appointments has already been called in this session (look in history)
+    const apptFetched = history.some(m => {
+      try {
+        const p = JSON.parse(m.content);
+        return p.action === 'get_appointments';
+      } catch (_) { return false; }
+    });
+
+    if (!apptFetched) {
+      console.warn('[Guard] Appointments agent tried to speak without loading data — forcing get_appointments');
+      action = 'get_appointments';
+      speak  = 'Um momento — já verifico as suas consultas.';
+      params = {};
+      parsed.action = action;
+      parsed.speak  = speak;
       parsed.params = params;
     }
   }

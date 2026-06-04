@@ -133,6 +133,52 @@ app.get('/health', (req, res) => {
 });
 
 // ─────────────────────────────────────────────
+// ADMIN — Read + Clean patient memory
+// GET /admin/memory?key=ADMIN_KEY          → view
+// DELETE /admin/memory?key=ADMIN_KEY&id=752 → wipe one patient
+// DELETE /admin/memory?key=ADMIN_KEY&all=1  → wipe all
+// ─────────────────────────────────────────────
+const fs   = require('fs');
+const path = require('path');
+const MEMORY_FILE = path.join('/app/data', 'patient_memory.json');
+const LOG_FILE    = path.join('/app/data', 'call_log.jsonl');
+
+function loadMem() {
+  try { return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8')); } catch (_) { return {}; }
+}
+function saveMem(data) {
+  fs.mkdirSync('/app/data', { recursive: true });
+  fs.writeFileSync(MEMORY_FILE, JSON.stringify(data, null, 2));
+}
+
+app.get('/admin/memory', (req, res) => {
+  if (req.query.key !== (process.env.ADMIN_KEY || 'vicki2025')) return res.status(403).json({ error: 'Forbidden' });
+  const mem = loadMem();
+  let log = [];
+  try { log = fs.readFileSync(LOG_FILE, 'utf8').trim().split('\n').slice(-20).map(l => JSON.parse(l)); } catch (_) {}
+  res.json({ memory: mem, recentCalls: log });
+});
+
+app.delete('/admin/memory', (req, res) => {
+  if (req.query.key !== (process.env.ADMIN_KEY || 'vicki2025')) return res.status(403).json({ error: 'Forbidden' });
+  const mem = loadMem();
+  if (req.query.all === '1') {
+    saveMem({});
+    return res.json({ wiped: 'ALL', previous: mem });
+  }
+  if (req.query.id) {
+    const id = String(req.query.id);
+    const previous = mem[id];
+    delete mem[id];
+    saveMem(mem);
+    return res.json({ wiped: id, previous });
+  }
+  res.status(400).json({ error: 'Provide ?id=PATIENT_ID or ?all=1' });
+});
+
+
+
+// ─────────────────────────────────────────────
 // HTTP SERVER + WEBSOCKET SERVER
 // ─────────────────────────────────────────────
 const server = http.createServer(app);

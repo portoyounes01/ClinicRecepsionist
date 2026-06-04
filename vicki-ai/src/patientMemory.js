@@ -60,6 +60,26 @@ function getPatientMemory(patientId) {
  * @param {object|null} data.explicitDoctorPreference  - { id, name } ONLY if patient said "I prefer..."
  * @param {string|null} data.explicitTimePreference    - 'morning'|'afternoon' ONLY if patient said so
  */
+function sanitizeSummary(summary) {
+  if (!summary) return 'Chamada concluída.';
+  // NEVER store doctor names, specific times, or appointment dates in memory.
+  // These facts must ALWAYS come from the API — never from AI memory.
+  // Keeping them causes hallucinations in future calls.
+  return summary
+    // Remove "com Dr(ª) X" patterns
+    .replace(/\bcom\s+a?\s*Dr[aª]?\.?\s+\w+/gi, '')
+    // Remove time references like "às 14h", "às 14:00", "às 11h30"
+    .replace(/\bàs?\s+\d{1,2}[h:]\d{0,2}/gi, '')
+    // Remove date references like "dia 12 de junho", "segunda-feira dia 5"
+    .replace(/\b(dia\s+\d{1,2}(\s+de\s+\w+)?|\w+-feira(\s+dia\s+\d{1,2})?)/gi, '')
+    // Remove appointment ID references
+    .replace(/\bID\s*[:=]?\s*\d+/gi, '')
+    // Remove specific slot/date info
+    .replace(/\b(manhã|tarde)\s+de\s+\w+/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim() || 'Chamada concluída.';
+}
+
 function updateAfterCall(patientId, {
   patientName,
   summary,
@@ -72,9 +92,12 @@ function updateAfterCall(patientId, {
   const all      = loadAll();
   const existing = all[String(patientId)] || { callHistory: [], totalCalls: 0 };
 
+  // Sanitize before storing — never keep appointment specifics
+  const cleanSummary = sanitizeSummary(summary);
+
   const record = {
     date:    new Date().toISOString().split('T')[0],
-    summary: summary || 'Call completed.',
+    summary: cleanSummary,
     intent:  intent  || 'general',
   };
 
@@ -85,7 +108,7 @@ function updateAfterCall(patientId, {
     patientName:     patientName || existing.patientName,
     totalCalls:      (existing.totalCalls || 0) + 1,
     lastCallDate:    new Date().toISOString(),
-    lastCallSummary: summary,
+    lastCallSummary: cleanSummary,
     callHistory:     history,
   };
 
@@ -98,7 +121,7 @@ function updateAfterCall(patientId, {
 
   all[String(patientId)] = updated;
   saveAll(all);
-  console.log(`[Memory] Saved patient ${patientId} — "${summary?.slice(0, 80)}"`);
+  console.log(`[Memory] Saved patient ${patientId} — "${cleanSummary?.slice(0, 80)}"`);
 }
 
 /**
