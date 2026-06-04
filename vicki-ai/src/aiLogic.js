@@ -1067,6 +1067,63 @@ async function processTurn({
   parsed.speak = speak;
   parsed.params = params;
 
+  // ── SMART GUARD: doctor fuzzy match — resolve mispronounced names on first try ──
+  // "Carla de Lisboas" → Carla Vilas Boas, "Doutor Hermes" → Dr. Hermes, etc.
+  // Fires BEFORE loop detector so the patient doesn't have to repeat themselves.
+  if (
+    currentAgent === 'booking' &&
+    action === 'none' &&
+    !pendingSlots?.length &&
+    cachedDoctors?.length &&
+    userText
+  ) {
+    // Normalize: strip accents, lowercase
+    const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+    const patientNorm = norm(userText);
+
+    // Only try if patient seems to be naming a doctor (contains "dr", "doutor", or a known first name)
+    const mentionsDoctor = /\b(dr[aª]?\.?|doutor[a]?)\b/i.test(userText) || cachedDoctors.some(d => {
+      const firstName = norm(d.medicShortName || d.medicName).split(/\s+/).filter(p => p.length >= 4 && !/^dr[aª]?\.?$/.test(p))[0];
+      return firstName && patientNorm.includes(firstName);
+    });
+
+    if (mentionsDoctor) {
+      // Score each doctor by how many name parts match the patient text
+      const candidates = cachedDoctors.map(doc => {
+        const names = [doc.medicShortName, doc.medicName].filter(Boolean);
+        let score = 0;
+        let matchedParts = [];
+        for (const name of names) {
+          const parts = norm(name).split(/\s+/).filter(p => p.length >= 3 && !/^dr[aª]?\.?$/.test(p));
+          for (const part of parts) {
+            if (part.length >= 4 && patientNorm.includes(part)) {
+              score += part.length; // longer matches = higher confidence
+              matchedParts.push(part);
+            }
+          }
+        }
+        return { doc, score, matchedParts: [...new Set(matchedParts)] };
+      }).filter(c => c.score > 0).sort((a, b) => b.score - a.score);
+
+      if (candidates.length === 1 || (candidates.length > 1 && candidates[0].score > candidates[1].score)) {
+        // Confident single match
+        const best = candidates[0];
+        console.log(`[Guard] DOCTOR MATCH — "${userText}" → ${best.doc.medicShortName} (id:${best.doc.medicId}) [matched: ${best.matchedParts.join(', ')}]`);
+        action = 'check_slots';
+        speak = `Claro, com ${best.doc.medicShortName} — um momento, já verifico a disponibilidade.`;
+        params = {
+          ...params,
+          medicId: best.doc.medicId,
+          motiveId: params.motiveId || 'ACH',
+          reasonText: updatedBookingReasonText || params.reasonText,
+        };
+        parsed.action = action;
+        parsed.speak = speak;
+        parsed.params = params;
+      }
+    }
+  }
+
   // ── HARD GUARD: loop detection → transfer to human after 3 repeats ──────────
   // If Vicki repeats the exact same message 3+ times, she's stuck and can't
   // understand the patient. Transfer the call instead of looping forever.
