@@ -532,9 +532,9 @@ async function executeAction(action, params, patient, callerNumber, history = []
       const aiDateFrom = params.dateFrom || params.date || null; // AI-extracted explicit date
 
       if (aiDateFrom) {
-        // Patient requested a specific date — use it as the start, search up to +14 days from it
+        // Patient requested a specific date — ONLY search on that exact day to prevent booking on the wrong day.
         dateFrom = aiDateFrom;
-        dateTo   = addDaysIso(aiDateFrom, 14);
+        dateTo   = aiDateFrom;
       } else if (searchDirection === 'earlier') {
         dateTo = params._explicitDateTo
           || (params._lastOfferedDate ? addDaysIso(params._lastOfferedDate, -1) : maxDate);
@@ -701,7 +701,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
           if (!p) return null;
           const lp = p.toLowerCase();
           if (lp === 'morning'  || lp === 'manhã' || lp === 'manha') return 'manhã';
-          if (lp === 'afternoon'|| lp === 'tarde')                    return 'tarde';
+          if (lp === 'afternoon'|| lp === 'tarde' || lp === 'evening' || lp === 'night' || lp === 'fim do dia') return 'tarde';
           return lp;
         };
         const wantedPeriod = normPeriod(params.chosenPeriod);

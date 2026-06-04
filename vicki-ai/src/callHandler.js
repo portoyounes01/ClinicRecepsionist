@@ -208,9 +208,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let conversationHistory = [];
   let currentAgent        = 'router';
   let unclearTurns        = 0;
-  let isSpeaking          = false;
+  let speechTokens        = [];
   let currentAbort        = null;
-  let sonioxOpen          = false;
+  let silenceWatchdog     = null;
+  let processingTurn      = false;
   let sonioxWs            = null;
   let pendingTranscript   = '';
   let lastInterimText     = '';   // latest Soniox interim — used to recover full sentence from rolling finals
@@ -420,13 +421,23 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
     // ── Barge-in: patient speaks 2+ words while Vicki talks ──────────
     if (isSpeaking && currentAbort && wordCount >= 2) {
-      console.log('[Barge-in] Patient interrupted — stopping Vicki');
-      clearTimeout(processingTimer); processingTimer = null;
-      currentAbort('barge-in'); currentAbort = null; isSpeaking = false;
-      lastInterimText = ''; pendingTranscript = '';
+      if (processingTurn) {
+        // Patient interrupted while we are doing heavy lifting (GPT/API).
+        // Let them interrupt the TTS, but DO NOT drop the lock, so we finish the task.
+        console.log('[Barge-in] Patient interrupted — but AI is processing (API). Keeping lock.');
+        currentAbort('barge-in'); currentAbort = null;
+        speakToCaller('Dê-me só um segundo, estou apenas a verificar o sistema.', () => {});
+        // DO NOT set isSpeaking = false. We want to block new turns.
+        lastInterimText = ''; pendingTranscript = '';
+      } else {
+        console.log('[Barge-in] Patient interrupted — stopping Vicki');
+        clearTimeout(processingTimer); processingTimer = null;
+        currentAbort('barge-in'); currentAbort = null; isSpeaking = false;
+        lastInterimText = ''; pendingTranscript = '';
+      }
     }
 
-    if (isSpeaking) return;
+    if (isSpeaking || processingTurn) return;
 
     // ── END TOKEN: fire AI immediately ───────────────────────────────
     // Soniox sends <end> when endpoint detection detects end-of-speech.
@@ -437,8 +448,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       const userText    = pendingTranscript.trim();
       pendingTranscript = '';
       lastInterimText   = '';
-      if (!userText || isSpeaking) return;
+      if (!userText || isSpeaking || processingTurn) return;
       isSpeaking = true;
+      processingTurn = true;
       console.log(`[STT] ENDPOINT DETECTED → AI Processing: "${userText}"`);
 
       const speakNow = (text, onDone) => speakToCaller(text, onDone);
@@ -751,9 +763,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         };
         doHangup();
       }
-
+      processingTurn = false;
     } catch (err) {
       console.error('[AI] Error:', err.message, err.stack);
+      processingTurn = false;
       await speakNow('Desculpe, não percebi bem — pode repetir?', () => { isSpeaking = false; currentAbort = null; });
       isSpeaking = false;
     }

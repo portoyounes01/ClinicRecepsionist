@@ -128,6 +128,10 @@ SEM VAGAS com médico específico:
   "Não há vagas com esse médico nas próximas semanas. Quer que verifique com o primeiro médico disponível?"
   → Se sim: chama check_slots SEM medicId.
 
+SEM VAGAS NA DATA PEDIDA (0 vagas no dia):
+  "Infelizmente não tenho vagas nesse dia exato. Quer que verifique para o dia seguinte ou noutra data?"
+  → Se sim: chama check_slots com searchDirection="later" e SEM dateFrom.
+
 PACIENTE PEDE "MAIS CEDO" ou "ANTES DISSO":
   → Chama check_slots com searchDirection="earlier" e SEM medicId.
   → Diz apenas: "Deixe-me verificar algo mais cedo."
