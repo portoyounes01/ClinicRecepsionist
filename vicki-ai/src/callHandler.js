@@ -753,7 +753,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       }
 
     } catch (err) {
-      console.error('[AI] Error:', err.message);
+      console.error('[AI] Error:', err.message, err.stack);
       await speakNow('Desculpe, não percebi bem — pode repetir?', () => { isSpeaking = false; currentAbort = null; });
       isSpeaking = false;
     }

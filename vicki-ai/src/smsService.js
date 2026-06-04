@@ -14,12 +14,10 @@ const axios = require('axios');
 const TELNYX_API_KEY           = process.env.TELNYX_API_KEY;
 const TELNYX_MESSAGING_PROFILE = process.env.TELNYX_MESSAGING_PROFILE || '40019e93-abb8-4ea7-9a4a-06c4c1126bb2';
 const SENDER_ID                = 'IVB';
+const CLINIC_PHONE             = '962 432 761';
 
 /**
  * Send an SMS via Telnyx alphanumeric sender ID.
- * @param {string} to — E.164 phone number (e.g. "+351969191933")
- * @param {string} text — Message body (max ~160 chars for 1 segment)
- * @returns {object|null} — Telnyx response data or null on failure
  */
 async function sendSMS(to, text) {
   if (!TELNYX_API_KEY) {
@@ -50,57 +48,62 @@ async function sendSMS(to, text) {
       },
     });
 
-    console.log(`[SMS] ✅ Sent to ${phone} — id: ${res.data?.data?.id}`);
+    console.log(`[SMS] Sent to ${phone} — id: ${res.data?.data?.id}`);
     return res.data;
   } catch (err) {
-    console.error(`[SMS] ❌ Failed to ${phone}:`, err.response?.data || err.message);
+    console.error(`[SMS] Failed to ${phone}:`, err.response?.data || err.message);
     return null;
   }
 }
 
 /**
- * Send booking confirmation SMS.
- * @param {object} opts
- * @param {string} opts.patientName — e.g. "VALTER MIGUEL"
- * @param {string} opts.phoneNumber — e.g. "+351969191933"
- * @param {string} opts.displayDate — e.g. "quinta-feira, dia 18 de junho"
- * @param {string} opts.displayTime — e.g. "14h45"
- * @param {string} opts.medicName   — e.g. "Dr. Hermes"
- * @param {string} opts.date        — ISO date e.g. "2026-06-18"
- * @param {string} opts.time        — e.g. "14:45"
+ * Format date as DD/MM/YYYY from ISO date string (e.g. "2026-06-18" → "18/06/2026")
  */
-async function sendBookingConfirmation({ patientName, phoneNumber, displayDate, displayTime, medicName, date, time }) {
-  // Build a clean, short SMS (fits in 1-2 segments)
-  const firstName = (patientName || '').split(/\s+/)[0];
-  const dateStr   = displayDate || date || '';
-  const timeStr   = displayTime || time || '';
+function formatDatePT(isoDate) {
+  if (!isoDate) return '';
+  const [y, m, d] = isoDate.split('-');
+  return `${d}/${m}/${y}`;
+}
 
-  const text = [
-    `Olá ${firstName}!`,
-    `A sua consulta está confirmada:`,
-    `📅 ${dateStr}`,
-    `🕐 ${timeStr}`,
-    `👨‍⚕️ ${medicName}`,
-    ``,
-    `Instituto Vilas Boas`,
-    `📍 Loulé`,
-    `📞 289 060 010`,
-  ].join('\n');
+/**
+ * Send booking confirmation SMS.
+ */
+async function sendBookingConfirmation({ patientName, phoneNumber, displayDate, displayTime, medicName, date, time, reasonText }) {
+  const dateStr = date ? formatDatePT(date) : (displayDate || '');
+  const timeStr = displayTime || time || '';
+  const reason  = reasonText || '';
 
-  return sendSMS(phoneNumber, text);
+  const lines = [
+    `Instituto Vilas Boas confirma a sua marcacao de consulta.`,
+    `Data: ${dateStr}`,
+    `Hora: ${timeStr}`,
+    `Medico: ${medicName || ''}`,
+  ];
+
+  if (reason) {
+    lines.push(`Motivo: ${reason}`);
+  }
+
+  lines.push('');
+  lines.push(`Caso nao possa comparecer, por favor contacte atraves do ${CLINIC_PHONE}.`);
+
+  return sendSMS(phoneNumber, lines.join('\n'));
 }
 
 /**
  * Send cancellation confirmation SMS.
  */
-async function sendCancellationConfirmation({ patientName, phoneNumber, displayDate, displayTime, medicName }) {
-  const firstName = (patientName || '').split(/\s+/)[0];
+async function sendCancellationConfirmation({ patientName, phoneNumber, displayDate, displayTime, medicName, date }) {
+  const dateStr = date ? formatDatePT(date) : (displayDate || '');
+  const timeStr = displayTime || '';
+  const doctorPart = medicName ? ` com ${medicName}` : '';
+  const datePart   = dateStr   ? ` agendada para ${dateStr}` : '';
+  const timePart   = timeStr   ? ` as ${timeStr}` : '';
+
   const text = [
-    `Olá ${firstName},`,
-    `A sua consulta${medicName ? ` com ${medicName}` : ''}${displayDate ? ` de ${displayDate}` : ''} foi cancelada com sucesso.`,
+    `Instituto Vilas Boas confirma o cancelamento da sua consulta${doctorPart}${datePart}${timePart}.`,
     ``,
-    `Para remarcar, ligue 289 060 010.`,
-    `Instituto Vilas Boas`,
+    `Para remarcar, contacte atraves do ${CLINIC_PHONE}.`,
   ].join('\n');
 
   return sendSMS(phoneNumber, text);

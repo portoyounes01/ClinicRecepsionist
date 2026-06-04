@@ -809,6 +809,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
           medicName:   chosenSlot.medicName,
           date:        chosenSlot.date,
           time:        chosenSlot.time,
+          reasonText:  params._bookingReasonText || params.motiveName || '',
         }).catch(err => console.error('[SMS] Background send failed:', err.message));
       }
 
