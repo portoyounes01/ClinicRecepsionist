@@ -593,7 +593,15 @@ async function executeAction(action, params, patient, callerNumber) {
           return h >= 13;
         });
 
-        // Prefer a single doctor who has both periods
+        // ── STRICT SAME-DOCTOR RULE ──────────────────────────────────────────
+        // ALL returned slots MUST come from the same doctor.
+        // Priority per day:
+        //   1. Doctor with morning AND afternoon (ideal — gives patient a choice)
+        //   2. Doctor with 2 morning slots (only morning available)
+        //   3. Doctor with 2 afternoon slots (only afternoon available)
+        //   4. Doctor with any single slot (last resort)
+        // NEVER mix two different doctors.
+
         const byDoc = {};
         for (const s of daySlots) {
           const id = s.medicId || s.medicShortName || s.medicName;
@@ -604,30 +612,47 @@ async function executeAction(action, params, patient, callerNumber) {
         }
 
         let chosen = [];
-        // Try doctor with both periods first
+
+        // Pass 1: prefer doctor with both morning AND afternoon
         for (const doc of Object.values(byDoc)) {
           if (doc.morning.length && doc.afternoon.length) {
-            chosen = [
-              ...doc.morning.slice(0, 2),
-              ...doc.afternoon.slice(0, 2),
-            ];
+            chosen = [doc.morning[0], doc.afternoon[0]];
             break;
           }
         }
 
-        // Fallback: best mix from all doctors
+        // Pass 2: doctor with 2 morning slots
         if (!chosen.length) {
-          const am = morningSlots.slice(0, 2);
-          const pm = afternoonSlots.slice(0, 2);
-          chosen = [...am, ...pm];
-          // If only one period exists, take up to 2 from it
-          if (!chosen.length) chosen = daySlots.slice(0, 2);
+          for (const doc of Object.values(byDoc)) {
+            if (doc.morning.length >= 2) {
+              chosen = doc.morning.slice(0, 2);
+              break;
+            }
+          }
+        }
+
+        // Pass 3: doctor with 2 afternoon slots
+        if (!chosen.length) {
+          for (const doc of Object.values(byDoc)) {
+            if (doc.afternoon.length >= 2) {
+              chosen = doc.afternoon.slice(0, 2);
+              break;
+            }
+          }
+        }
+
+        // Pass 4: any doctor with at least 1 slot (single option)
+        if (!chosen.length) {
+          for (const doc of Object.values(byDoc)) {
+            const any = [...doc.morning, ...doc.afternoon];
+            if (any.length) { chosen = [any[0]]; break; }
+          }
         }
 
         if (chosen.length) { pickedSlots = chosen; break; }
       }
 
-      if (!pickedSlots.length && raw.length) pickedSlots = raw.slice(0, 2);
+      if (!pickedSlots.length && raw.length) pickedSlots = [raw[0]];
 
       const slots = pickedSlots.map(toSlot);
 
