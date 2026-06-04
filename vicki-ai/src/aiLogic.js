@@ -766,7 +766,21 @@ async function processTurn({
   returnToAgent = null,   // agent to return to after a detour (e.g. info → booking)
   returnContext = {},     // saved state: { pendingSlots, bookingReasonText, lastOfferedDate }
 }) {
-  history.push({ role: 'user', content: userText });
+  // ── Synthetic auto-speak trigger ─────────────────────────────────────────────
+  // When userText === '[continua]' this is an internal trigger (not patient speech).
+  // We inject a system instruction instead of polluting history with fake patient text.
+  const isSyntheticTurn = userText === '[continua]';
+  if (isSyntheticTurn) {
+    // Don't push to history — inject a system nudge instead
+    history.push({ role: 'system', content:
+      `[INSTRUÇÃO INTERNA — não mostrar ao paciente] ` +
+      `Acabaste de ser activado como agente ${currentAgent}. ` +
+      `Abre naturalmente: apresenta a informação relevante ou, se estás no contexto de marcação, ` +
+      `oferece o slot que ficou pendente. Fala como se fosse a tua primeira frase neste turno.`
+    });
+  } else {
+    history.push({ role: 'user', content: userText });
+  }
 
   const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory);
 
@@ -775,7 +789,8 @@ async function processTurn({
   let speakReadyAt = null;
   let finishReason = null;
 
-  console.log(`[AI] OpenAI request | model=${LIVE_AGENT_MODEL} agent=${currentAgent} history=${history.length}`);
+  console.log(`[AI] OpenAI request | model=${LIVE_AGENT_MODEL} agent=${currentAgent} history=${history.length}${isSyntheticTurn ? ' (autoSpeak)' : ''}`);
+
 
   // ── Stream GPT response — extract speak ASAP, start TTS before GPT finishes ──
   const stream = await openai.chat.completions.create({
@@ -978,9 +993,10 @@ async function processTurn({
       bookingReasonText: restoredReason,
       pendingSlots:     restoredSlots,
       lastOfferedDate:  restoredLastDate,
-      returnToAgent:    clearReturn ? null    : newReturnToAgent,
-      returnContext:    clearReturn ? {}       : newReturnContext,
+      returnToAgent:    clearReturn ? null : newReturnToAgent,
+      returnContext:    clearReturn ? {}   : newReturnContext,
       clearReturn,
+      autoSpeak: true,   // ← tells callHandler to immediately fire the new agent without waiting for patient
     };
   }
 

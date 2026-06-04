@@ -558,6 +558,47 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       }
       // speakStarted && !actionFired → onSpeakReady TTS handles cleanup
 
+      // ── AUTO-SPEAK: after silent inter-agent transfer, fire new agent immediately ──
+      // Without this the new agent waits silently for patient to speak again.
+      // We wait for the bridge phrase to finish, then trigger the new agent with
+      // a synthetic "[continua]" so it opens naturally.
+      if (result.autoSpeak && !callEnding) {
+        // Wait for the bridge phrase to finish playing before the new agent speaks
+        if (speakStarted) await bridgePromise;
+        await new Promise(r => setTimeout(r, 150)); // tiny gap between phrases
+        console.log(`[Agent] autoSpeak: firing ${currentAgent} after transfer`);
+        isSpeaking = true;
+        const autoResult = await processTurn({
+          history:          conversationHistory,
+          patient,
+          clinicInfo:       CLINIC_INFO,
+          userText:         '[continua]',   // synthetic — tells agent to continue naturally
+          cachedDoctors,
+          cachedMotives,
+          currentAgent,
+          unclearTurns,
+          onSpeakReady:     null,           // no early speak for auto-turns
+          pendingSlots,
+          pendingAppts,
+          patientMemory,
+          lastOfferedDate,
+          bookingReasonText,
+          callerNumber,
+          returnToAgent,
+          returnContext,
+        });
+        conversationHistory = autoResult.history;
+        if (autoResult.currentAgent   !== undefined) currentAgent   = autoResult.currentAgent;
+        if (autoResult.pendingSlots   && autoResult.pendingSlots.length)  pendingSlots  = autoResult.pendingSlots;
+        if (autoResult.bookingReasonText !== undefined) bookingReasonText = autoResult.bookingReasonText;
+        if (autoResult.lastOfferedDate !== undefined) lastOfferedDate = autoResult.lastOfferedDate;
+        if (autoResult.speak) {
+          await speakNow(autoResult.speak, () => { isSpeaking = false; currentAbort = null; });
+        } else {
+          isSpeaking = false; currentAbort = null;
+        }
+      }
+
       if (result.action === 'transfer_to_human') {
         if (callEnding) return;
         callEnding = true;
