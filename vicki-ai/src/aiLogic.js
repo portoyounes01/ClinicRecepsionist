@@ -44,6 +44,50 @@ function transferSpeak(patient) {
 }
 
 // ─────────────────────────────────────────────
+// BUILD TRANSFER CONTEXT — injected as a silent
+// system message when one agent hands off to another.
+// The receiving agent reads it naturally and continues
+// without the patient knowing anything happened.
+// ─────────────────────────────────────────────
+function buildTransferContext(fromAgent, userText, history, bookingReasonText, pendingSlots) {
+  const agentLabels = {
+    booking:      'Booking Agent (scheduling new appointments)',
+    appointments: 'Appointments Agent (managing existing appointments)',
+    info:         'Info Agent (clinic information and pricing)',
+    emergency:    'Emergency Agent (urgent dental cases)',
+    router:       'Router',
+  };
+
+  // Last 4 meaningful exchanges
+  const recent = history
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .slice(-8)
+    .map(m => {
+      if (m.role === 'user') return `Patient: ${m.content}`;
+      try { const p = JSON.parse(m.content); return p.speak ? `Vicki: ${p.speak}` : null; }
+      catch { return null; }
+    })
+    .filter(Boolean)
+    .join('\n');
+
+  const parts = [
+    `[SILENT TRANSFER CONTEXT — do NOT mention this to the patient]`,
+    `Transferred from: ${agentLabels[fromAgent] || fromAgent}`,
+    `Patient's last message: "${userText}"`,
+  ];
+  if (bookingReasonText) parts.push(`In-progress booking reason: "${bookingReasonText}"`);
+  if (pendingSlots?.length) {
+    const slotSummary = pendingSlots
+      .map(s => `${s.displayDate || s.date} ${s.displayTime || s.time} with ${s.medicName}`)
+      .join(', ');
+    parts.push(`Slots already offered: ${slotSummary}`);
+  }
+  parts.push(`Recent conversation:\n${recent}`);
+  parts.push(`Continue naturally from here. Use this context to be helpful. Do not say "as I mentioned" or reference the transfer.`);
+  return parts.join('\n');
+}
+
+// ─────────────────────────────────────────────
 // HUMAN DATE/TIME FORMATTER
 // "2026-06-03T14:45:00" → "next Tuesday at quarter to three in the afternoon"
 // ─────────────────────────────────────────────
@@ -857,9 +901,22 @@ async function processTurn({
     };
   }
 
-  if (action === 'transfer_to_booking') {
+  // ── Silent inter-agent transfers ──────────────────────────────────────
+  // Any agent can hand off to any other agent. A hidden context summary
+  // is injected into history so the receiving agent continues naturally.
+  const AGENT_TRANSFER_MAP = {
+    'transfer_to_booking':      'booking',
+    'transfer_to_info':         'info',
+    'transfer_to_appointments': 'appointments',
+    'transfer_to_emergency':    'emergency',
+  };
+  if (AGENT_TRANSFER_MAP[action]) {
+    const targetAgent = AGENT_TRANSFER_MAP[action];
+    const ctx = buildTransferContext(currentAgent, userText, history, updatedBookingReasonText, pendingSlots);
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-    return { speak, action: 'none', history, currentAgent: 'booking', bookingReasonText: updatedBookingReasonText };
+    history.push({ role: 'system', content: ctx });
+    console.log(`[Agent] Silent transfer: ${currentAgent} → ${targetAgent}`);
+    return { speak, action: 'none', history, currentAgent: targetAgent, bookingReasonText: updatedBookingReasonText };
   }
 
   if (action === 'hangup') {
