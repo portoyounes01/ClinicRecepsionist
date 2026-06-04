@@ -336,13 +336,15 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       console.log('[Soniox] Connection open');
       // Send config message first — field names per Soniox RT WebSocket API
       ws.send(JSON.stringify({
-        api_key:                process.env.SONIOX_API_KEY,
-        model:                  'stt-rt-preview',
-        audio_format:           'pcm_s16le',   // raw 16-bit signed little-endian PCM
-        sample_rate:            8000,
-        num_channels:           1,
-        language_hints:         ['pt', 'en'],  // Portuguese primary, English fallback
-        enable_interim_results: true,
+        api_key:                  process.env.SONIOX_API_KEY,
+        model:                    'stt-rt-v4',        // Feb 2026 model — lowest endpoint latency
+        audio_format:             'pcm_s16le',
+        sample_rate:              8000,
+        num_channels:             1,
+        language_hints:           ['pt', 'en'],
+        enable_interim_results:   true,
+        enable_endpoint_detection: true,              // KEY: sends <end> token on silence → instant trigger
+        max_endpoint_delay_ms:    800,                // max wait before forcing endpoint (500-3000ms)
         context: {
           entries: contextWords.map(w => ({ value: w })),
         },
@@ -380,36 +382,38 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     // is_final is PER TOKEN — a message is "final" when ALL tokens have is_final=true
     // End of stream: { tokens: [], finished: true }
 
-    if (data.finished) return; // end-of-stream signal, ignore
+    if (data.finished) return;
 
-    const tokens    = data.tokens || [];
+    const tokens  = data.tokens || [];
     if (!tokens.length) return;
 
-    const isFinal   = tokens.every(t => t.is_final === true);
-    const text      = tokens.map(t => t.text).join('').trim();
-    if (!text) return;
+    // Check for endpoint detection token — Soniox sends text='<end>' when speech ends
+    const endToken    = tokens.find(t => t.text === '<end>');
+    const isFinal     = tokens.every(t => t.is_final === true);
+    const speechTokens = tokens.filter(t => t.text !== '<end>');
+    const text        = speechTokens.map(t => t.text).join('').trim();
 
-    lastSpeechTime = Date.now(); // reset silence watchdog on any speech activity
+    lastSpeechTime = Date.now();
 
-    // ── Confidence filter — skip near-noise final transcripts ────────
-    const confidence = tokens.length
-      ? tokens.reduce((s, t) => s + (t.confidence ?? 1), 0) / tokens.length
+    // ── Confidence filter ─────────────────────────────────────────────
+    const confidence = speechTokens.length
+      ? speechTokens.reduce((s, t) => s + (t.confidence ?? 1), 0) / speechTokens.length
       : 1;
-    if (isFinal && confidence < 0.40) {
-      console.log(`[STT] Low-confidence (${confidence.toFixed(2)}) skipped: "${text}"`);
-      return;
-    }
 
-    // ── Soniox sends interims every token — deduplicate logs ─────────
-    const transcript = text.replace(/\b(.{4,})\b(?:[.,!?]?\s+\1)+/gi, '$1');
+    // ── Deduplicate and clean transcript ─────────────────────────────
+    const transcript = (text || lastInterimText || '').replace(/\b(.{4,})\b(?:[.,!?]?\s+\1)+/gi, '$1');
     const wordCount  = transcript.split(/\s+/).filter(Boolean).length;
 
-    // Only log when text actually changes (suppress per-character spam)
-    if (transcript !== lastInterimText) {
-      console.log(`[STT] ${isFinal ? 'FINAL' : 'interim'}: "${transcript}" [final_ms=${data.final_audio_proc_ms ?? '?'}]`);
+    // Update running buffer with longest seen text
+    if (text && text.length > (lastInterimText || '').length) {
+      lastInterimText = text;
+      if (transcript !== pendingTranscript) {
+        console.log(`[STT] interim: "${transcript}"`);
+      }
+      pendingTranscript = transcript;
     }
 
-    // ── Barge-in: patient says 2+ words while Vicki speaks ───────────
+    // ── Barge-in: patient speaks 2+ words while Vicki talks ──────────
     if (isSpeaking && currentAbort && wordCount >= 2) {
       console.log('[Barge-in] Patient interrupted — stopping Vicki');
       clearTimeout(processingTimer); processingTimer = null;
@@ -419,26 +423,20 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
     if (isSpeaking) return;
 
-    // ── Silence-gap trigger ───────────────────────────────────────────
-    // Only reset the debounce timer when the text GROWS (new words arrive).
-    // Soniox sometimes re-sends the same or shorter window — ignore those.
-
-    if (transcript.length > (lastInterimText || '').length) {
-
-      lastInterimText = transcript;
-      pendingTranscript = transcript;
-
-      // Reset silence timer only when new words arrive
+    // ── END TOKEN: fire AI immediately ───────────────────────────────
+    // Soniox sends <end> when endpoint detection detects end-of-speech.
+    // This is the fastest, most accurate trigger — no debounce needed.
+    if (endToken && pendingTranscript) {
       clearTimeout(processingTimer);
-      processingTimer = setTimeout(async () => {
-      const userText = pendingTranscript.trim();
-      pendingTranscript = '';
       processingTimer = null;
+      const userText    = pendingTranscript.trim();
+      pendingTranscript = '';
+      lastInterimText   = '';
       if (!userText || isSpeaking) return;
-    isSpeaking = true;
-    console.log(`[AI] Processing: "${userText}"`);
+      isSpeaking = true;
+      console.log(`[STT] ENDPOINT DETECTED → AI Processing: "${userText}"`);
 
-    const speakNow = (text, onDone) => speakToCaller(text, onDone);
+      const speakNow = (text, onDone) => speakToCaller(text, onDone);
 
     try {
       let speakStarted    = false;
@@ -625,9 +623,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       await speakNow('Sorry, could you repeat that?', () => { isSpeaking = false; currentAbort = null; });
       isSpeaking = false;
     }
-    }, 600); // 600ms silence gap — fires after patient stops talking
-    }  // end if (transcript grew)
+    }  // end if (endToken)
   }  // end handleSonioxMessage
+
+
 
 
   // ── Telnyx WebSocket ──────────────────────
