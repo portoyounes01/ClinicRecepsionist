@@ -175,12 +175,13 @@ function inferLatestExplicitSlotOrdinal(history = [], params = {}) {
   return latest;
 }
 
-function humanSlot(isoString) {
+function humanSlot(isoString, lang = 'pt') {
   // IMPORTANT: Newsoft returns local Lisbon time (e.g. '2026-06-18T14:00:00') with NO timezone suffix.
   // Using new Date() would treat it as UTC and add +1h offset. Parse manually to avoid this.
   const [datePart, timePart] = isoString.split('T');
   const [year, month, day]   = datePart.split('-').map(Number);
   const [hh, mm]             = (timePart || '00:00').split(':').map(Number);
+  const en = lang === 'en';
 
   // Build a local Date just for weekday/month name (day-of-week)
   const date     = new Date(year, month - 1, day);
@@ -188,19 +189,35 @@ function humanSlot(isoString) {
   const today    = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const diffDays = Math.round((date - today) / 86400000);
 
-  const weekday   = date.toLocaleDateString('pt-PT', { weekday: 'long' });
-  const monthName = date.toLocaleDateString('pt-PT', { month: 'long' });
+  const locale    = en ? 'en-US' : 'pt-PT';
+  const weekday   = date.toLocaleDateString(locale, { weekday: 'long' });
+  const monthName = date.toLocaleDateString(locale, { month: 'long' });
 
   let dayName;
-  if      (diffDays === 0) dayName = 'hoje';
-  else if (diffDays === 1) dayName = 'amanhã';
-  else if (diffDays <= 6)  dayName = `esta ${weekday}`;
-  else                     dayName = `${weekday}, dia ${day} de ${monthName}`;
+  if (en) {
+    if      (diffDays === 0) dayName = 'today';
+    else if (diffDays === 1) dayName = 'tomorrow';
+    else if (diffDays <= 6)  dayName = `this ${weekday}`;
+    else                     dayName = `${weekday}, ${monthName} ${day}`;
+  } else {
+    if      (diffDays === 0) dayName = 'hoje';
+    else if (diffDays === 1) dayName = 'amanhã';
+    else if (diffDays <= 6)  dayName = `esta ${weekday}`;
+    else                     dayName = `${weekday}, dia ${day} de ${monthName}`;
+  }
 
+  // period stays in Portuguese — it is used for slot filtering/matching internally.
   const period  = hh < 12 ? 'manhã' : hh < 18 ? 'tarde' : 'noite';
-  const timeStr = mm === 0
-    ? `${String(hh).padStart(2,'0')}h`
-    : `${String(hh).padStart(2,'0')}h${String(mm).padStart(2,'0')}`;
+  let timeStr;
+  if (en) {
+    const h12  = (hh % 12) === 0 ? 12 : hh % 12;
+    const ampm = hh < 12 ? 'am' : 'pm';
+    timeStr = mm === 0 ? `${h12} ${ampm}` : `${h12}:${String(mm).padStart(2, '0')} ${ampm}`;
+  } else {
+    timeStr = mm === 0
+      ? `${String(hh).padStart(2, '0')}h`
+      : `${String(hh).padStart(2, '0')}h${String(mm).padStart(2, '0')}`;
+  }
 
   return { dayName, timeStr, period };
 }
@@ -263,6 +280,99 @@ function explicitBeforeDateTo(userText, referenceDate) {
   const target = new Date(ref.getFullYear(), ref.getMonth(), day);
   if (Number.isNaN(target.getTime())) return null;
   return addDaysIso(target.toISOString().split('T')[0], -1);
+}
+
+// ── Resolve a caller's spoken date/time into a concrete search window ─────────
+// The LLM is unreliable at date math (it once turned "próximo mês" into today and
+// found zero slots, losing the booking), so we resolve relative expressions
+// deterministically, server-side, from the caller's actual words.
+// Returns { dateFrom, dateTo, exact, period } — any field may be null.
+//   exact=true  → caller named a specific day; search ONLY that day.
+//   exact=false → a window (or null) to search across.
+function resolveDatePreference(userText, todayIso) {
+  const text  = normalizeForIntent(userText || '');
+  const today = new Date(todayIso + 'T00:00:00');
+  // Format using LOCAL components — NEVER toISOString(), which shifts the calendar
+  // day by the UTC offset (same reason humanSlot parses Lisbon time manually).
+  const iso     = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+
+  let period = null;
+  if (/\b(manha|morning)\b/.test(text)) period = 'manhã';
+  else if (/\b(tarde|afternoon|evening|after lunch)\b/.test(text)) period = 'tarde';
+
+  const out = (from, to, exact) => ({
+    dateFrom: from ? iso(from) : null,
+    dateTo:   to   ? iso(to)   : null,
+    exact:    !!exact,
+    period,
+  });
+
+  if (!text || text === 'continua') return out(null, null, false);
+
+  // ── Exact single-day expressions ──────────────────────────────────────────
+  if (/\b(hoje|today)\b/.test(text)) return out(today, today, true);
+  if (/\b(depois de amanha|day after tomorrow)\b/.test(text)) return out(addDays(today, 2), addDays(today, 2), true);
+  if (/\b(amanha|tomorrow)\b/.test(text)) return out(addDays(today, 1), addDays(today, 1), true);
+
+  // Weekday name → next occurrence (exact day)
+  const weekdays = [
+    ['domingo|sunday', 0], ['segunda|monday', 1], ['terca|tuesday', 2],
+    ['quarta|wednesday', 3], ['quinta|thursday', 4], ['sexta|friday', 5], ['sabado|saturday', 6],
+  ];
+  for (const [re, dow] of weekdays) {
+    if (new RegExp(`\\b(${re})`).test(text)) {
+      let delta = (dow - today.getDay() + 7) % 7;
+      if (delta === 0) delta = 7; // "on Monday" means the next Monday, not today
+      const d = addDays(today, delta);
+      return out(d, d, true);
+    }
+  }
+
+  // "dia 22", "no dia 22", "22 de junho", "22nd of June"
+  const months = {
+    janeiro:0, fevereiro:1, marco:2, abril:3, maio:4, junho:5, julho:6, agosto:7, setembro:8, outubro:9, novembro:10, dezembro:11,
+    january:0, february:1, march:2, april:3, may:4, june:5, july:6, august:7, september:8, october:9, november:10, december:11,
+  };
+  const dayMatch = text.match(/\b(?:dia|no dia|day)\s+(\d{1,2})\b/)
+    || text.match(/\b(\d{1,2})\s+de\s+([a-z]+)/)
+    || text.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+of\s+([a-z]+)/);
+  if (dayMatch) {
+    const day = parseInt(dayMatch[1], 10);
+    const monthName = dayMatch[2];
+    let monthIdx = today.getMonth();
+    if (monthName && months[monthName] !== undefined) monthIdx = months[monthName];
+    if (day >= 1 && day <= 31) {
+      let target = new Date(today.getFullYear(), monthIdx, day);
+      if (target < today) {
+        target = monthName
+          ? new Date(today.getFullYear() + 1, monthIdx, day)
+          : new Date(today.getFullYear(), monthIdx + 1, day);
+      }
+      if (!Number.isNaN(target.getTime())) return out(target, target, true);
+    }
+  }
+
+  // ── Relative windows (not exact) ──────────────────────────────────────────
+  if (/\b(proximo mes|next month|mes que vem)\b/.test(text)) {
+    const from = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const to   = new Date(today.getFullYear(), today.getMonth() + 2, 0); // last day of next month
+    return out(from, to, false);
+  }
+  if (/\b(proxima semana|next week|semana que vem)\b/.test(text)) {
+    const toNextMon = ((8 - today.getDay()) % 7) || 7;
+    const from = addDays(today, toNextMon);
+    return out(from, addDays(from, 6), false);
+  }
+  if (/\b(esta semana|this week)\b/.test(text)) {
+    const toSun = (7 - today.getDay()) % 7;
+    return out(today, addDays(today, toSun || 6), false);
+  }
+  if (/\b(o mais cedo|mais cedo possivel|primeira vaga|primeiro disponivel|primeira disponivel|assim que possivel|asap|earliest|first available|any day|qualquer dia|quando houver)\b/.test(text)) {
+    return out(today, addDays(today, 28), false);
+  }
+
+  return out(null, null, false); // caller didn't specify a date
 }
 
 function normalizeBookingReasonText(value) {
@@ -467,20 +577,54 @@ async function resolvePatientForBooking({ patient, params, callerNumber }) {
 // Converts raw Newsoft API data into spoken text.
 // Eliminates the second OpenAI call — saves ~1.5s per action.
 // ─────────────────────────────────────────────
-function formatActionResponse(action, actionResult) {
+function formatActionResponse(action, actionResult, lang = 'pt') {
+  // VOICE NOTE: these strings are spoken directly to the caller (they bypass the LLM),
+  // so they MUST match the caller's language — otherwise an English caller hears
+  // Portuguese slot offers (a real bug seen in production).
+  const en = lang === 'en';
   switch (action) {
 
     case 'check_slots': {
       const slots = actionResult.slots || [];
       if (!slots.length) {
+        // Emergency with no near-term opening → connect to a human immediately. Never minimize pain.
+        if (actionResult.urgent) {
+          return {
+            speak: en
+              ? "I'm so sorry you're in pain. I don't have an urgent opening in the next few days, so I'll connect you with our team right now to get you seen as soon as possible."
+              : "Lamento muito que esteja com dores. Não tenho vaga urgente nos próximos dias, por isso vou ligá-lo/a já com a nossa equipa para o/a atendermos o quanto antes.",
+            action: 'transfer_to_human',
+          };
+        }
         if (actionResult.searchDirection === 'earlier') {
           return {
-            speak: "Neste momento não vejo nada mais cedo. O último slot que ofereci continua a ser o mais próximo que encontro. Quer ficar com esse?",
+            speak: en
+              ? "I don't see anything earlier right now. The last slot I offered is still the soonest I can find. Would you like to keep it?"
+              : "Neste momento não vejo nada mais cedo. O último slot que ofereci continua a ser o mais próximo que encontro. Quer ficar com esse?",
+            action: 'none',
+          };
+        }
+        // Honest message — never claim a window we did not actually search.
+        if (actionResult.exact) {
+          return {
+            speak: en
+              ? "There are no openings on that day. Would you like me to check another nearby day?"
+              : "Não há vagas livres nesse dia. Quer que veja outro dia próximo?",
+            action: 'none',
+          };
+        }
+        if (actionResult.medicSpecified) {
+          return {
+            speak: en
+              ? "I couldn't find openings with that doctor around then. Would you like me to check with another doctor?"
+              : "Não encontrei vagas com esse médico nessa altura. Quer que veja com outro médico?",
             action: 'none',
           };
         }
         return {
-          speak: "Peço desculpa, não há vagas livres com esse médico nas próximas 4 semanas. Quer que verifique com outro médico?",
+          speak: en
+            ? "I couldn't find any openings around then. Would you like me to look at another date?"
+            : "Não encontrei vagas disponíveis nessa altura. Quer que procure noutra data?",
           action: 'none',
         };
       }
@@ -488,34 +632,44 @@ function formatActionResponse(action, actionResult) {
       // Split into morning (before 13h) and afternoon (13h+)
       const morningSlots   = slots.filter(s => s.period === 'manhã');
       const afternoonSlots = slots.filter(s => s.period !== 'manhã');
+      const hs = iso => humanSlot(iso, lang);
+      const withDoc = name => en ? ` with ${name}` : ` com ${name}`;
 
       let speak;
       const sameDoctor = slots.every(s => s.medicName === slots[0].medicName);
-      const sameDay    = slots.every(s => s.date === slots[0].date);
-      const dayLabel   = sameDay ? humanSlot(slots[0].date + 'T' + slots[0].time).dayName : null;
 
       if (morningSlots.length >= 1 && afternoonSlots.length >= 1) {
         // Has both morning and afternoon
-        const am1 = humanSlot(morningSlots[0].date + 'T' + morningSlots[0].time);
-        const pm1 = humanSlot(afternoonSlots[0].date + 'T' + afternoonSlots[0].time);
+        const am1 = hs(morningSlots[0].date + 'T' + morningSlots[0].time);
+        const pm1 = hs(afternoonSlots[0].date + 'T' + afternoonSlots[0].time);
         if (sameDoctor) {
-          speak = `Tenho ${am1.dayName} — ${am1.timeStr} de manhã ou ${pm1.timeStr} de tarde, ambos com ${slots[0].medicName}. Qual prefere?`;
+          speak = en
+            ? `I have ${am1.dayName} — ${am1.timeStr} in the morning or ${pm1.timeStr} in the afternoon, both with ${slots[0].medicName}. Which would you prefer?`
+            : `Tenho ${am1.dayName} — ${am1.timeStr} de manhã ou ${pm1.timeStr} de tarde, ambos com ${slots[0].medicName}. Qual prefere?`;
         } else {
-          speak = `Tenho ${am1.dayName} às ${am1.timeStr} com ${morningSlots[0].medicName}, ou ${pm1.timeStr} de tarde com ${afternoonSlots[0].medicName}. Qual prefere?`;
+          speak = en
+            ? `I have ${am1.dayName} at ${am1.timeStr} with ${morningSlots[0].medicName}, or ${pm1.timeStr} in the afternoon with ${afternoonSlots[0].medicName}. Which would you prefer?`
+            : `Tenho ${am1.dayName} às ${am1.timeStr} com ${morningSlots[0].medicName}, ou ${pm1.timeStr} de tarde com ${afternoonSlots[0].medicName}. Qual prefere?`;
         }
       } else if (morningSlots.length >= 2) {
         // Only morning, 2 options
-        const [m1, m2] = morningSlots.map(s => humanSlot(s.date + 'T' + s.time));
-        speak = `Tenho ${m1.dayName} às ${m1.timeStr} ou às ${m2.timeStr}, ambos de manhã${sameDoctor ? ' com ' + slots[0].medicName : ''}. Qual prefere?`;
+        const [m1, m2] = morningSlots.map(s => hs(s.date + 'T' + s.time));
+        speak = en
+          ? `I have ${m1.dayName} at ${m1.timeStr} or ${m2.timeStr}, both in the morning${sameDoctor ? withDoc(slots[0].medicName) : ''}. Which would you prefer?`
+          : `Tenho ${m1.dayName} às ${m1.timeStr} ou às ${m2.timeStr}, ambos de manhã${sameDoctor ? withDoc(slots[0].medicName) : ''}. Qual prefere?`;
       } else if (afternoonSlots.length >= 2) {
         // Only afternoon, 2 options
-        const [p1, p2] = afternoonSlots.map(s => humanSlot(s.date + 'T' + s.time));
-        speak = `Tenho ${p1.dayName} às ${p1.timeStr} ou às ${p2.timeStr}, ambos de tarde${sameDoctor ? ' com ' + slots[0].medicName : ''}. Qual prefere?`;
+        const [p1, p2] = afternoonSlots.map(s => hs(s.date + 'T' + s.time));
+        speak = en
+          ? `I have ${p1.dayName} at ${p1.timeStr} or ${p2.timeStr}, both in the afternoon${sameDoctor ? withDoc(slots[0].medicName) : ''}. Which would you prefer?`
+          : `Tenho ${p1.dayName} às ${p1.timeStr} ou às ${p2.timeStr}, ambos de tarde${sameDoctor ? withDoc(slots[0].medicName) : ''}. Qual prefere?`;
       } else {
         // Single slot
         const s = slots[0];
-        const t = humanSlot(s.date + 'T' + s.time);
-        speak = `Tenho vaga ${t.dayName} às ${t.timeStr} com ${s.medicName} — assim está bem para si?`;
+        const t = hs(s.date + 'T' + s.time);
+        speak = en
+          ? `I have an opening ${t.dayName} at ${t.timeStr} with ${s.medicName} — does that work for you?`
+          : `Tenho vaga ${t.dayName} às ${t.timeStr} com ${s.medicName} — assim está bem para si?`;
       }
 
       return {
@@ -532,12 +686,21 @@ function formatActionResponse(action, actionResult) {
     case 'get_appointments': {
       const appts = actionResult.appointments || [];
       if (!appts.length) {
-        return { speak: "Neste momento não tem nenhuma consulta agendada connosco.", action: 'none' };
+        return {
+          speak: en
+            ? "You don't have any appointments scheduled with us at the moment."
+            : "Neste momento não tem nenhuma consulta agendada connosco.",
+          action: 'none',
+        };
       }
       const a = appts[0];
-      const more = appts.length > 1 ? ` Tem ${appts.length} consultas no total.` : '';
+      const more = appts.length > 1
+        ? (en ? ` You have ${appts.length} appointments in total.` : ` Tem ${appts.length} consultas no total.`)
+        : '';
       return {
-        speak: `A sua próxima consulta é ${a.display}.${more} Deseja fazer alguma alteração?`,
+        speak: en
+          ? `Your next appointment is ${a.display}.${more} Would you like to make any changes?`
+          : `A sua próxima consulta é ${a.display}.${more} Deseja fazer alguma alteração?`,
         action: 'none',
         pendingAppointments: appts,
         _appointmentsContext: appts.map((ap, i) =>
@@ -549,22 +712,35 @@ function formatActionResponse(action, actionResult) {
     case 'book_appointment':
       if (actionResult.needsPatientDetails) {
         return {
-          speak: actionResult.speak || "Consigo marcar — pode dizer-me o seu nome completo para o ficheiro do paciente?",
+          speak: actionResult.speak || (en
+            ? "I can book that — could you give me your full name for the patient file?"
+            : "Consigo marcar — pode dizer-me o seu nome completo para o ficheiro do paciente?"),
           action: 'none',
         };
       }
       if (actionResult.error || !actionResult.appointmentId) {
         return {
-          speak: "Peço desculpa, não foi possível concluir a marcação no nosso sistema. Um momento — vou ligá-lo/a com um membro da nossa equipa que resolve isto imediatamente.",
+          speak: en
+            ? "I'm sorry, I couldn't complete the booking in our system. One moment — I'll connect you with a member of our team who can sort this out right away."
+            : "Peço desculpa, não foi possível concluir a marcação no nosso sistema. Um momento — vou ligá-lo/a com um membro da nossa equipa que resolve isto imediatamente.",
           action: 'transfer_to_human',
         };
       }
       {
-        // Use the ACTUAL booked slot details for confirmation — never trust AI's memory of what it offered
+        // Use the ACTUAL booked slot details for confirmation — never trust AI's memory of what it offered.
+        // Recompute the date/time label in the caller's language (stored labels are pt-PT).
         const bs = actionResult.bookedSlot;
-        const confirmSpeak = bs
-          ? `Perfeito — está tudo marcado! Esperamo-lo/a ${bs.displayDate || bs.date} às ${bs.displayTime || bs.time} com ${bs.medicName}. Posso ajudar em mais alguma coisa?`
-          : `Perfeito — está tudo marcado! Esperamo-lo/a com muito gosto. Posso ajudar em mais alguma coisa?`;
+        const t  = (bs && bs.date && bs.time) ? humanSlot(bs.date + 'T' + bs.time, lang) : null;
+        let confirmSpeak;
+        if (en) {
+          confirmSpeak = (bs && t)
+            ? `Perfect — you're all booked! We'll see you ${t.dayName} at ${t.timeStr} with ${bs.medicName}. Is there anything else I can help with?`
+            : `Perfect — you're all booked! We look forward to seeing you. Is there anything else I can help with?`;
+        } else {
+          confirmSpeak = (bs && t)
+            ? `Perfeito — está tudo marcado! Esperamo-lo/a ${t.dayName} às ${t.timeStr} com ${bs.medicName}. Posso ajudar em mais alguma coisa?`
+            : `Perfeito — está tudo marcado! Esperamo-lo/a com muito gosto. Posso ajudar em mais alguma coisa?`;
+        }
         return { speak: confirmSpeak, action: 'none' };
       }
 
@@ -572,27 +748,36 @@ function formatActionResponse(action, actionResult) {
     case 'cancel_appointment':
       if (actionResult.cancelled && actionResult.remainingAppointments?.length) {
         const next = actionResult.remainingAppointments[0];
+        const n = actionResult.remainingAppointments.length;
         return {
-          speak: `Pronto, essa consulta esta cancelada. Ainda tem ${actionResult.remainingAppointments.length} consulta${actionResult.remainingAppointments.length > 1 ? 's' : ''} marcada${actionResult.remainingAppointments.length > 1 ? 's' : ''}. Quer cancelar tambem a proxima, ${next.display}?`,
+          speak: en
+            ? `Done, that appointment is cancelled. You still have ${n} appointment${n > 1 ? 's' : ''} booked. Would you also like to cancel the next one, ${next.display}?`
+            : `Pronto, essa consulta esta cancelada. Ainda tem ${n} consulta${n > 1 ? 's' : ''} marcada${n > 1 ? 's' : ''}. Quer cancelar tambem a proxima, ${next.display}?`,
           action: 'none',
           pendingAppointments: actionResult.remainingAppointments,
         };
       }
       if (actionResult.cancelled && actionResult.remainingAppointments) {
         return {
-          speak: `Pronto, esta cancelado. Nao vejo mais consultas marcadas. Posso ajudar em mais alguma coisa?`,
+          speak: en
+            ? `Done, it's cancelled. I don't see any other appointments booked. Is there anything else I can help with?`
+            : `Pronto, esta cancelado. Nao vejo mais consultas marcadas. Posso ajudar em mais alguma coisa?`,
           action: 'none',
           pendingAppointments: [],
         };
       }
       if (!actionResult.cancelled) {
         return {
-          speak: `Peço desculpa, não foi possível cancelar no nosso sistema. Um momento — vou ligá-lo/a com alguém da nossa equipa que trata disto para si.`,
+          speak: en
+            ? `I'm sorry, I couldn't cancel it in our system. One moment — I'll connect you with someone from our team who can handle this for you.`
+            : `Peço desculpa, não foi possível cancelar no nosso sistema. Um momento — vou ligá-lo/a com alguém da nossa equipa que trata disto para si.`,
           action: 'transfer_to_human',
         };
       }
       return {
-        speak: `Pronto, está cancelado. Sei que às vezes surgem imprevistos — quer que encontre outra vaga para não perder o seu lugar?`,
+        speak: en
+          ? `Done, it's cancelled. I know things come up — would you like me to find another opening so you don't lose your place?`
+          : `Pronto, está cancelado. Sei que às vezes surgem imprevistos — quer que encontre outra vaga para não perder o seu lugar?`,
         action: 'none',
       };
 
@@ -605,7 +790,7 @@ function formatActionResponse(action, actionResult) {
 // NEWSOFT API EXECUTOR
 // Runs the action chosen by the current agent.
 // ─────────────────────────────────────────────
-async function executeAction(action, params, patient, callerNumber, history = []) {
+async function executeAction(action, params, patient, callerNumber, history = [], lang = 'pt') {
   switch (action) {
 
     case 'check_slots': {
@@ -622,24 +807,52 @@ async function executeAction(action, params, patient, callerNumber, history = []
       let dateTo   = maxDate;
 
       // ── Date range logic ─────────────────────────────────────────────────
+      // Source of truth is the caller's own words (resolved server-side in
+      // resolveDatePreference), NOT the LLM's date math — it once collapsed
+      // "próximo mês" to today and found nothing, losing the booking.
       // Priority:
-      //   1. AI gave an explicit dateFrom (patient said "dia 22 de junho") → use it as start
-      //   2. Earlier search → search before the last offered date
-      //   3. Later search → start 1 day after last offered date
-      //   4. Default → start from today
-      const aiDateFrom = params.dateFrom || params.date || null; // AI-extracted explicit date
+      //   1. Caller named a specific day     → search ONLY that day (exact)
+      //   2. Caller gave a relative window   → search that window (e.g. all of next month)
+      //   3. "earlier" follow-up             → search before the last offered date
+      //   4. "later" follow-up               → search after the last offered date
+      //   5. LLM gave a bare date, no window → search a 4-week window from it
+      //   6. Default                         → today .. +4 weeks
+      const pref       = params._datePref || null;
+      const aiDateFrom = params.dateFrom || params.date || null;
 
-      if (aiDateFrom) {
-        // Patient requested a specific date — ONLY search on that exact day to prevent booking on the wrong day.
-        dateFrom = aiDateFrom;
-        dateTo   = aiDateFrom;
+      if (pref && pref.exact && pref.dateFrom) {
+        dateFrom = pref.dateFrom;
+        dateTo   = pref.dateFrom;
+      } else if (pref && pref.dateFrom) {
+        dateFrom = pref.dateFrom;
+        dateTo   = pref.dateTo || maxDate;
       } else if (searchDirection === 'earlier') {
         dateTo = params._explicitDateTo
           || (params._lastOfferedDate ? addDaysIso(params._lastOfferedDate, -1) : maxDate);
-        if (dateTo < dateFrom) return { slots: [], searchDirection, dateFrom, dateTo };
+        if (dateTo < dateFrom) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: !!medicId };
       } else if (params._lastOfferedDate) {
         dateFrom = addDaysIso(params._lastOfferedDate, 1);
+      } else if (aiDateFrom) {
+        // LLM extracted a bare date but caller used no recognizable phrase —
+        // treat it as a window start, never a single locked day.
+        dateFrom = aiDateFrom;
+        dateTo   = addDaysIso(aiDateFrom, 28);
       }
+
+      const periodPref = pref?.period || null;
+
+      // ── Emergency triage ──────────────────────────────────────────────────
+      // For urgent cases (motiveId UR) only consider genuinely near-term slots.
+      // If none exist in the next few days we escalate to a human rather than
+      // offering a slot a week out as if it were urgent (per clinic protocol).
+      const isUrgent = motiveId === 'UR';
+      if (isUrgent && !(pref && pref.exact)) {
+        const urgentHorizon = addDaysIso(today, 3);
+        if (dateFrom > urgentHorizon) dateFrom = today;
+        if (dateTo   > urgentHorizon) dateTo   = urgentHorizon;
+      }
+
+      console.log(`[Newsoft] slot search window: ${dateFrom}..${dateTo}${periodPref ? ` period=${periodPref}` : ''}${pref?.exact ? ' (exact day)' : ''}${isUrgent ? ' [URGENT]' : ''}`);
 
       const raw = await newsoft.getAvailableSlots({
         medicId,
@@ -647,7 +860,17 @@ async function executeAction(action, params, patient, callerNumber, history = []
         dateFrom,
         dateTo,
       });
-      if (!raw.length) return { slots: [], searchDirection, dateFrom, dateTo };
+      if (!raw.length) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: !!medicId, exact: !!(pref && pref.exact), urgent: isUrgent };
+
+      // Honor a stated period (manhã/tarde) when slots exist for it; otherwise show all.
+      let pool = raw;
+      if (periodPref) {
+        const filtered = raw.filter(s => {
+          const h = parseInt(s.appointmentDateBegin?.split('T')[1] || '0', 10);
+          return periodPref === 'manhã' ? h < 13 : h >= 13;
+        });
+        if (filtered.length) pool = filtered;
+      }
 
       // Pick exactly 1 morning (before 13:00) and 1 afternoon/evening (≥13:00)
       // so Vicki always offers just 2 clear choices, never a long list
@@ -671,7 +894,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
       // Returns at most 4 slots total so Vicki can offer real choice.
 
       const byDate = {};
-      for (const s of raw) {
+      for (const s of pool) {
         const d = s.appointmentDateBegin?.split('T')[0];
         if (d) { if (!byDate[d]) byDate[d] = []; byDate[d].push(s); }
       }
@@ -751,14 +974,14 @@ async function executeAction(action, params, patient, callerNumber, history = []
         if (chosen.length) { pickedSlots = chosen; break; }
       }
 
-      if (!pickedSlots.length && raw.length) pickedSlots = [raw[0]];
+      if (!pickedSlots.length && pool.length) pickedSlots = [pool[0]];
 
       const slots = pickedSlots.map(toSlot);
 
       const lastOfferedDate = slots.length > 0
         ? slots.reduce((max, s) => s.date > max ? s.date : max, slots[0].date)
         : null;
-      return { slots: slots.length ? slots : [toSlot(raw[0])], lastOfferedDate, searchDirection, dateFrom, dateTo };
+      return { slots: slots.length ? slots : [toSlot(pool[0])], lastOfferedDate, searchDirection, dateFrom, dateTo };
     }
 
     case 'get_appointments': {
@@ -767,11 +990,13 @@ async function executeAction(action, params, patient, callerNumber, history = []
       if (!raw.length) return { appointments: [] };
       const appointments = raw.map(a => {
         const iso = a.appointmentDateBegin || (a.appointmentDate + 'T' + (a.appointmentTime || '00:00'));
-        const t   = humanSlot(iso);
+        const t   = humanSlot(iso, lang);
         const doctorName = spokenDoctorName(a.medicName || a.medicShortName);
         return {
           appointmentId: a.appointmentId,
-          display: `${t.dayName} às ${t.timeStr} da ${t.period} com ${a.medicName || a.medicShortName}`,
+          display: lang === 'en'
+            ? `${t.dayName} at ${t.timeStr} with ${doctorName}`
+            : `${t.dayName} às ${t.timeStr} da ${t.period} com ${doctorName}`,
           doctor:      doctorName,
           medicName:   doctorName,
           date:        iso?.split('T')[0],
@@ -1733,12 +1958,13 @@ async function processTurn({
                 _lastOfferedDate: lastOfferedDate,
                 _slotSearchDirection: params.searchDirection || inferSlotSearchDirection(userText),
                 _explicitDateTo: explicitBeforeDateTo(userText, lastOfferedDate),
+                _datePref: resolveDatePreference(userText, new Date().toISOString().split('T')[0]),
                 _bookingReasonText: updatedBookingReasonText,
               }
             : params;
-      const actionResult = await executeAction(action, enrichedParams, patient, callerNumber, history);
+      const actionResult = await executeAction(action, enrichedParams, patient, callerNumber, history, nextLanguageState);
       if (actionResult) {
-        const formatted = formatActionResponse(action, actionResult);
+        const formatted = formatActionResponse(action, actionResult, nextLanguageState);
         if (formatted) {
           history.push({ role: 'assistant', content: JSON.stringify(parsed) });
           // If slots were returned, inject a system context message so the
@@ -1779,4 +2005,4 @@ async function processTurn({
   return finalize({ speak, action, history, currentAgent: nextAgent, bookingReasonText: updatedBookingReasonText });
 }
 
-module.exports = { processTurn, generateCallSummary };
+module.exports = { processTurn, generateCallSummary, resolveDatePreference };

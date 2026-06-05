@@ -61,6 +61,48 @@ function suppressUnsafeEarlySpeak(text) {
     .test(value);
 }
 
+// ── Turn-taking config ──────────────────────────────────────────────────────
+// BARGE_IN_MODE controls how the caller's speech can interrupt Vicki:
+//   'protected' (default) — Vicki finishes questions, slot offers and confirmations;
+//                           she yields on real interruptions during other speech.
+//   'full'                — Vicki yields on any real interruption.
+//   'off'                 — Vicki always finishes; caller speech is heard afterwards.
+// VOICE NOTE: this directly changes when Vicki stops talking on the phone.
+const BARGE_IN_MODE      = (process.env.BARGE_IN_MODE || 'protected').toLowerCase();
+const BARGE_IN_MIN_WORDS = Math.max(1, parseInt(process.env.BARGE_IN_MIN_WORDS || '4', 10));
+
+// Pure acknowledgements/backchannels — the caller saying one of these alone is NOT a
+// real interruption (it means "I'm listening"), so it must never cut Vicki off.
+const BACKCHANNEL_RE = /^(sim|ok|okay|okey|t[aá]|certo|claro|pois|exato|exacto|isso|uh|uhh|hum+|hmm+|ah|aha|ah[aã]|yeah|yep|yes|right|sure|mm|mhm|uh-huh)[\s.,!?]*$/i;
+function isBackchannel(text) {
+  return BACKCHANNEL_RE.test((text || '').trim());
+}
+
+// Protected utterances must be heard in full: questions, slot offers, and
+// booking/cancellation confirmations. Vicki finishes these even if the caller speaks.
+function isProtectedUtterance(text) {
+  const t = (text || '').trim();
+  if (!t) return false;
+  if (/[?？]/.test(t)) return true;                                              // any question
+  if (/\b\d{1,2}\s?h(\d{2})?\b|\b\d{1,2}:\d{2}\b|\b\d{1,2}\s?(?:am|pm)\b/i.test(t)) return true; // a time (slot offer)
+  if (/\b(manh[ãa]|tarde|qual prefere|which one|prefere|prefer|dispon[íi]vel|available)\b/i.test(t)) return true; // slot offer
+  if (/(marcad|agendad|confirmad|cancelad|booked|confirmed|cancell?ed|tratad|feito|pronto)/i.test(t)) return true; // confirmation
+  return false;
+}
+
+// Echo guard — Vicki's own TTS can be picked up by the mic as if the caller spoke.
+// If "heard" text is largely contained in what Vicki just said, treat it as echo.
+function looksLikeEcho(heard, spoken) {
+  const clean = s => (s || '').toLowerCase().replace(/[^\p{L}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  const h = clean(heard), s = clean(spoken);
+  if (!h || !s) return false;
+  if (s.includes(h)) return true;
+  const hw = h.split(' ').filter(Boolean);
+  if (!hw.length) return false;
+  const sw = new Set(s.split(' '));
+  return hw.filter(w => sw.has(w)).length / hw.length > 0.7;
+}
+
 function clearTelnyxAudio(telnyxWs, reason = '') {
   if (telnyxWs?.readyState !== 1) return;
   telnyxWs.send(JSON.stringify({ event: 'clear' }));
@@ -231,6 +273,11 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let returnContext       = {};     // saved pendingSlots + bookingReason for resume
   let languageState       = 'unknown';
 
+  // ── Turn-taking state ─────────────────────────────────────────────────────
+  let currentUtteranceProtected = false; // is Vicki currently saying something she must finish?
+  let lastSpokenText            = '';     // last thing Vicki said (for echo detection)
+  let deferredUserText          = null;   // caller speech captured while Vicki was talking
+
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
   let callEnding          = false;      // prevents double-hangup
@@ -268,8 +315,11 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     },
   };
 
-  const speakToCaller = (text, onDone) =>
-    speak(text, ws, onDone, (fn) => { currentAbort = fn; }, playbackControls);
+  const speakToCaller = (text, onDone) => {
+    currentUtteranceProtected = isProtectedUtterance(text);
+    lastSpokenText            = text || '';
+    return speak(text, ws, onDone, (fn) => { currentAbort = fn; }, playbackControls);
+  };
 
   // ── Watchdog 1: Max call duration (15 min) ────────────────────────────────
   // If a call is still open after 15 min something went wrong — auto-hangup.
@@ -304,6 +354,25 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       );
     }
   }, 15000); // check every 15 seconds
+
+  // ── Watchdog 3: Deferred-speech flush ─────────────────────────────────────
+  // If the caller finished a sentence while Vicki was speaking (e.g. she was
+  // finishing a protected slot offer), answer it the instant she stops — so
+  // nothing the caller said is ever lost. VOICE NOTE: this is what lets Vicki
+  // "finish what she's saying, even if the caller speaks" without going deaf.
+  const deferredFlushWatchdog = setInterval(() => {
+    if (callEnding || isSpeaking || processingTurn || !deferredUserText) return;
+    const txt = deferredUserText;
+    deferredUserText = null;
+    if (looksLikeEcho(txt, lastSpokenText)) {
+      console.log(`[Turn] Dropped deferred speech (echo of Vicki): "${txt}"`);
+      return;
+    }
+    pendingTranscript = '';
+    lastInterimText   = '';
+    console.log(`[Turn] Answering deferred speech after Vicki finished: "${txt}"`);
+    runTurn(txt);
+  }, 250); // check 4x/second so the reply feels immediate
 
 
 
@@ -426,14 +495,24 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       pendingTranscript = transcript;
     }
 
-    // ── Barge-in: patient speaks 2+ words while Vicki talks ──────────
-    if (isSpeaking && currentAbort && wordCount >= 2) {
+    // ── Turn-taking: should the caller's speech interrupt Vicki? ─────────────
+    // A real interruption needs enough words AND must not be a mere backchannel.
+    // In 'protected' mode, Vicki never gets cut off mid question/slot offer/confirmation.
+    const realInterruption = wordCount >= BARGE_IN_MIN_WORDS && !isBackchannel(transcript);
+    let shouldBarge = false;
+    if (isSpeaking && currentAbort && realInterruption) {
+      if      (BARGE_IN_MODE === 'off')  shouldBarge = false;
+      else if (BARGE_IN_MODE === 'full') shouldBarge = true;
+      else /* protected */               shouldBarge = !currentUtteranceProtected;
+    }
+
+    if (shouldBarge) {
       if (processingTurn) {
         // Patient interrupted while we are doing heavy lifting (GPT/API).
         // Let them interrupt the TTS, but DO NOT drop the lock, so we finish the task.
         console.log('[Barge-in] Patient interrupted — but AI is processing (API). Keeping lock.');
         currentAbort('barge-in'); currentAbort = null;
-        speakToCaller('Dê-me só um segundo, estou apenas a verificar o sistema.', () => {});
+        speakToCaller(languageState === 'en' ? 'Give me just a second, I\'m checking the system.' : 'Dê-me só um segundo, estou apenas a verificar o sistema.', () => {});
         // DO NOT set isSpeaking = false. We want to block new turns.
         lastInterimText = ''; pendingTranscript = '';
       } else {
@@ -441,6 +520,14 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         clearTimeout(processingTimer); processingTimer = null;
         currentAbort('barge-in'); currentAbort = null; isSpeaking = false;
         lastInterimText = ''; pendingTranscript = '';
+      }
+    } else if (isSpeaking && endToken && transcript && !isBackchannel(transcript)) {
+      // Vicki is finishing her sentence but the caller has completed a thought.
+      // Remember it and answer the moment she stops (see deferredFlushWatchdog),
+      // so we never go deaf to what the caller said while she was speaking.
+      deferredUserText = transcript.trim();
+      if (currentUtteranceProtected) {
+        console.log(`[Turn] Finishing protected message; deferring caller: "${deferredUserText}"`);
       }
     }
 
@@ -459,12 +546,20 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       if (confidence < 0.55 && wordCount <= 4) {
         console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat: "${userText}"`);
         isSpeaking = true;
-        speakToCaller('Desculpe, não percebi bem. Pode repetir, por favor?', () => { isSpeaking = false; currentAbort = null; });
+        speakToCaller(languageState === 'en' ? 'Sorry, I didn\'t quite catch that. Could you repeat, please?' : 'Desculpe, não percebi bem. Pode repetir, por favor?', () => { isSpeaking = false; currentAbort = null; });
         return;
       }
+      console.log(`[STT] ENDPOINT DETECTED → AI Processing: "${userText}"`);
+      runTurn(userText);
+    }
+  }  // end handleSonioxMessage
+
+  // ── runTurn: execute one full conversation turn (LLM → action → speech) ──────
+  // Called on endpoint detection, or deferred by the flush watchdog after Vicki
+  // finishes a protected message so she always answers what the caller said.
+  async function runTurn(userText) {
       isSpeaking = true;
       processingTurn = true;
-      console.log(`[STT] ENDPOINT DETECTED → AI Processing: "${userText}"`);
 
       const speakNow = (text, onDone) => speakToCaller(text, onDone);
 
@@ -493,11 +588,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // ── Second filler — fires only if API is slow (>2.5s) ──────────────
       // Plays a short patience phrase so the caller never hears dead air.
       // Cancels itself the moment processTurn returns. No agent involved.
-      const PATIENCE_FILLERS = [
-        "Só mais um momento...",
-        "Já já...",
-        "Quase pronto...",
-      ];
+      const PATIENCE_FILLERS = languageState === 'en'
+        ? ["Just one moment...", "Almost there...", "One second..."]
+        : ["Só mais um momento...", "Já já...", "Quase pronto..."];
       let patienceTimer = null;
       let patienceFired = false;
       patienceTimer = setTimeout(() => {
@@ -507,7 +600,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           console.log(`[TTS] Patience filler: "${filler}"`);
           speakToCaller(filler, () => {});
         }
-      }, 3500); // raised from 2500 — avoids firing on normal 3-4s AI responses
+      }, 2500); // fire sooner so callers don't sit in dead air on slow first-token (2-3s) responses
 
       // ── History trimmer — keep max 24 messages, always preserve slot/appt context ──
       // Large histories slow the AI and increase hallucination risk.
@@ -793,11 +886,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     } catch (err) {
       console.error('[AI] Error:', err.message, err.stack);
       processingTurn = false;
-      await speakNow('Desculpe, não percebi bem — pode repetir?', () => { isSpeaking = false; currentAbort = null; });
+      await speakNow(languageState === 'en' ? 'Sorry, I didn\'t quite catch that — could you repeat?' : 'Desculpe, não percebi bem — pode repetir?', () => { isSpeaking = false; currentAbort = null; });
       isSpeaking = false;
     }
-    }  // end if (endToken)
-  }  // end handleSonioxMessage
+  }  // end runTurn
 
 
 
@@ -862,13 +954,20 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
               console.log(`[Newsoft] ${cachedDoctors.length} doctors, ${cachedMotives.length} motives`);
 
               const firstName = patient?.patientName?.split(' ')[0];
+              // If we already established this caller speaks English, greet in English and
+              // seed languageState so action results/fillers start in the right language.
+              const greetEn = patientMemory?.language === 'en';
+              if (greetEn) languageState = 'en';
               let greeting;
               if (firstName && patientMemory?.totalCalls > 0) {
-                // Paciente recorrente — vai direto ao assunto, caloroso e pessoal
-                greeting = `Olá ${firstName}! Que bom ouvir a sua voz — em que posso ajudar hoje?`;
+                // Returning patient — go straight to the point, warm and personal
+                greeting = greetEn
+                  ? `Hi ${firstName}! Lovely to hear from you — how can I help today?`
+                  : `Olá ${firstName}! Que bom ouvir a sua voz — em que posso ajudar hoje?`;
               } else if (firstName) {
-                // Primeiro contacto ou memória desconhecida
-                greeting = `Olá ${firstName}! Sou a Vicki, a assistente virtual do Instituto Vilas Boas. Em que posso ajudar?`;
+                greeting = greetEn
+                  ? `Hi ${firstName}! I'm Vicki, the virtual assistant at Instituto Vilas Boas. How can I help?`
+                  : `Olá ${firstName}! Sou a Vicki, a assistente virtual do Instituto Vilas Boas. Em que posso ajudar?`;
               } else {
                 greeting = `Olá! Sou a Vicki, a assistente virtual do Instituto Vilas Boas. Em que posso ajudar?`;
               }
@@ -891,7 +990,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           if (msg.media?.payload) {
             const linear = pcmaToLinear16(Buffer.from(msg.media.payload, 'base64'));
             // NOTE: audio-level barge-in removed — phone echo triggers false positives.
-            // Word-count barge-in (2+ words) handles interrupts reliably instead.
+            // Turn-taking is handled in handleSonioxMessage via BARGE_IN_MODE (see top of file):
+            // word-count + backchannel filtering, with protected messages finishing uninterrupted.
             if (sonioxOpen && sonioxWs?.readyState === WebSocket.OPEN) {
               sonioxWs.send(linear);
             } else {
@@ -928,6 +1028,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     console.log('[Call] Closed');
     clearTimeout(maxDurationWatchdog);
     clearInterval(silenceWatchdog);
+    clearInterval(deferredFlushWatchdog);
     try { if (sonioxWs) { sonioxWs.close(); sonioxWs = null; } } catch (_) {}
   });
 
