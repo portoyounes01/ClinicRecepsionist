@@ -5,7 +5,9 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "test:golden": "node scripts/golden-routing-language-test.js",
+    "test:stress": "node scripts/stress-test.js"
   },
   "dependencies": {
     "@elevenlabs/elevenlabs-js": "^2.49.1",

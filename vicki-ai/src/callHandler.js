@@ -55,6 +55,12 @@ function suppressEarlySpeak(text, currentAgent, pendingSlots) {
   return /\bwhich one\b.*\b(morning|afternoon)\b|\bmorning or (?:the )?afternoon\b/i.test(text || '');
 }
 
+function suppressUnsafeEarlySpeak(text) {
+  const value = text || '';
+  return /(\best[aá]\s+(tudo\s+)?(marcad|confirmad|tratad|feito|pronto)\b|\bbooked\b|\bconfirmed\b|\bcancelled\b|\bcanceled\b|\bconsulta\s+(marcada|cancelada)\b)/i
+    .test(value);
+}
+
 function clearTelnyxAudio(telnyxWs, reason = '') {
   if (telnyxWs?.readyState !== 1) return;
   telnyxWs.send(JSON.stringify({ event: 'clear' }));
@@ -223,6 +229,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let bookingReasonText   = null;
   let returnToAgent       = null;   // agent to resume after info/insurance detour
   let returnContext       = {};     // saved pendingSlots + bookingReason for resume
+  let languageState       = 'unknown';
 
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
@@ -449,6 +456,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       pendingTranscript = '';
       lastInterimText   = '';
       if (!userText || isSpeaking || processingTurn) return;
+      if (confidence < 0.55 && wordCount <= 4) {
+        console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat: "${userText}"`);
+        isSpeaking = true;
+        speakToCaller('Desculpe, não percebi bem. Pode repetir, por favor?', () => { isSpeaking = false; currentAbort = null; });
+        return;
+      }
       isSpeaking = true;
       processingTurn = true;
       console.log(`[STT] ENDPOINT DETECTED → AI Processing: "${userText}"`);
@@ -468,7 +481,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
       const onSpeakReady = (earlyText) => {
         if (!speakStarted && isSpeaking) {
-          if (suppressEarlySpeak(earlyText, currentAgent, pendingSlots)) {
+          if (suppressEarlySpeak(earlyText, currentAgent, pendingSlots) || suppressUnsafeEarlySpeak(earlyText)) {
             console.log(`[TTS] Early speak suppressed before slots: "${earlyText}"`);
             return;
           }
@@ -528,10 +541,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         callerNumber,
         returnToAgent,
         returnContext,
+        languageState,
       });
       clearTimeout(patienceTimer); // cancel filler if API was fast
 
       conversationHistory = result.history;
+      if (result.languageState !== undefined) languageState = result.languageState;
       if (result.currentAgent   !== undefined) currentAgent   = result.currentAgent;
       if (result.unclearTurns   !== undefined) unclearTurns   = result.unclearTurns;
       if (result.pendingSlots   && result.pendingSlots.length)  pendingSlots  = result.pendingSlots;
@@ -640,6 +655,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
             callerNumber,
             returnToAgent,
             returnContext,
+            languageState,
           });
         } catch (autoErr) {
           console.error('[Agent] autoSpeak error:', autoErr.message);
@@ -648,6 +664,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         }
         if (autoResult) {
           conversationHistory = autoResult.history;
+          if (autoResult.languageState !== undefined) languageState = autoResult.languageState;
           if (autoResult.currentAgent   !== undefined) currentAgent   = autoResult.currentAgent;
           if (autoResult.pendingSlots   && autoResult.pendingSlots.length)  pendingSlots  = autoResult.pendingSlots;
           if (autoResult.pendingAppts   && autoResult.pendingAppts.length)  pendingAppts  = autoResult.pendingAppts;

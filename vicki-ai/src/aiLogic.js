@@ -33,9 +33,18 @@ const LIVE_AGENT_MODEL = 'gpt-5.4-mini';
 // Called before EVERY transfer_to_human.
 // Varies naturally so it never sounds scripted.
 // ─────────────────────────────────────────────
-function transferSpeak(patient) {
+function transferSpeak(patient, languageState = 'pt') {
   const firstName = patient?.patientName?.split(' ')[0];
   const name = firstName ? `, ${firstName}` : '';
+  if (languageState === 'en') {
+    const phrases = [
+      `Of course${name} - I'll connect you with our team now.`,
+      `No problem${name} - one moment while I connect you with our team.`,
+      `Absolutely${name} - I'll connect you with someone from our team who can help.`,
+    ];
+    return phrases[Math.floor(Date.now() / 1000) % phrases.length];
+  }
+
   const phrases = [
     `Um momento${name} — vou ligá-lo/a com um membro da nossa equipa que terá todo o gosto em ajudar.`,
     `Claro${name} — só um instante enquanto o/a transfiro para um colega nosso que pode tratar disto.`,
@@ -867,17 +876,141 @@ async function executeAction(action, params, patient, callerNumber, history = []
 // AGENT PROMPT SELECTOR
 // Returns the system prompt for the active agent.
 // ─────────────────────────────────────────────
-function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory) {
+function normalizeForIntent(text = '') {
+  return String(text)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function detectCallerLanguage(userText = '', previous = 'unknown') {
+  const text = normalizeForIntent(userText);
+  if (!text || userText === '[continua]') return previous || 'unknown';
+
+  const ptSignals = /\b(ola|bom dia|boa tarde|consulta|marcar|desmarcar|remarcar|obrigad[ao]|sim|nao|dor|dente|medico|doutor|doutora|seguro|preco|quanto custa|horario|morada|amanha|hoje)\b/.test(text);
+  const enSignals = /\b(hello|hi|book|schedule|appointment|consultation|doctor|dentist|cleaning|cancel|reschedule|come in|available|see me|this week|next week|price|cost|insurance|speak english|do you speak|real person|talk to someone|speak to someone|human|reception|manager|urgent|urgently|thanks|thank you|goodbye|bye)\b/.test(text);
+
+  if (enSignals && !ptSignals) return 'en';
+  if (ptSignals && !enSignals) return 'pt';
+  if (/\b(do you speak english|can you speak english|speak english)\b/.test(text)) return 'en';
+  return previous || 'unknown';
+}
+
+function speakIn(languageState, pt, en) {
+  return languageState === 'en' ? en : pt;
+}
+
+function deterministicTransferOverride(currentAgent, userText, languageState, patient) {
+  if (!userText || userText === '[continua]') return null;
+  const text = normalizeForIntent(userText);
+
+  const emergency = /\b(severe|terrible|unbearable|emergency|urgent\w*|urgency|toothache|abscess|swelling|bleeding|knocked out|broke|broken tooth|acidente|urgente|urgencia|dor forte|muita dor|inchaco|sangramento|abcesso|dente partido)\b/.test(text);
+  if (emergency && currentAgent !== 'emergency') {
+    return {
+      speak: speakIn(languageState, 'Lamento muito, vamos tratar disso imediatamente.', "I'm sorry to hear that, we'll deal with this right away."),
+      action: 'transfer_to_emergency',
+      currentAgent: 'emergency',
+    };
+  }
+
+  const human = /\b(real person|human|reception|receptionist|manager|complaint|billing|bill|overcharged|charged incorrectly|insurance|health plan|falar com alguem|pessoa real|rececao|gerente|reclamacao|faturacao|fatura|cobraram|seguro|subsistema|plano de saude)\b/.test(text);
+  if (human && currentAgent !== 'human') {
+    return {
+      speak: speakIn(languageState, 'Claro, vou ligá-lo/a com a nossa equipa agora mesmo.', "Of course, I'll connect you with our team now."),
+      action: 'transfer_to_human',
+      currentAgent: 'human',
+    };
+  }
+
+  const pricing = /\b(price|cost|charge|quote|how much|quanto custa|preco|custo|orcamento|honorarios)\b/.test(text);
+  if (pricing && currentAgent !== 'info' && currentAgent !== 'emergency') {
+    return {
+      speak: speakIn(languageState, 'Boa pergunta, já lhe dou essa informação.', "Good question, I can help with that."),
+      action: 'transfer_to_info',
+      currentAgent: 'info',
+    };
+  }
+
+  return null;
+}
+
+function deterministicRouterDecision(userText, languageState) {
+  const text = normalizeForIntent(userText);
+  if (!text) return null;
+
+  if (/^(adeus|ate logo|ate ja|obrigad[ao]|era so isso|mais nada|foi tudo|bye|goodbye|thanks|thank you|that's all|nothing else)\b/.test(text)) {
+    return {
+      intent: 'goodbye',
+      action: 'hangup',
+      nextAgent: 'router',
+      speak: speakIn(languageState, 'Muito obrigada por ligar para o Instituto Vilas Boas. Até logo!', 'Thank you for calling Instituto Vilas Boas. Goodbye!'),
+    };
+  }
+
+  if (/\b(do you speak english|can you speak english|speak english|falam ingles|fala ingles)\b/.test(text)) {
+    return {
+      intent: 'info',
+      action: 'none',
+      nextAgent: 'info',
+      speak: speakIn(languageState, 'Sim, a nossa equipa consegue ajudar em inglês. O que gostaria de saber?', 'Yes, our team can help in English. What would you like to know?'),
+    };
+  }
+
+  const scheduleInfo = /\b(available on mondays?|available on tuesdays?|available on wednesdays?|available on thursdays?|available on fridays?|available on saturdays?|available on sundays?|dentist available today|doctor available today|medico disponivel hoje|dentista disponivel hoje|quando trabalha|que dias trabalha)\b/.test(text);
+  if (scheduleInfo) {
+    return {
+      intent: 'info',
+      action: 'none',
+      nextAgent: 'info',
+      speak: speakIn(languageState, 'Com todo o gosto, diga-me o que gostaria de saber.', 'Of course, what would you like to know?'),
+    };
+  }
+
+  const booking = /\b(book|schedule|appointment|consultation|see a doctor|see the dentist|come in|available this week|available next week|can .* see me|marcar|agendar|consulta|ver um medico|vir esta semana|tem disponibilidade|pode ver-me)\b/.test(text);
+  const existingAppointment = /\b(cancel|reschedule|postpone|change my appointment|move my appointment|push my appointment|have an appointment|my appointment tomorrow|what time .* appointment|forgot what time .* appointment|next appointment|do i have an appointment|confirm my appointment|cancelar|desmarcar|remarcar|mudar a consulta|a que horas e a minha consulta|tenho consulta)\b/.test(text);
+  if (existingAppointment) {
+    return {
+      intent: 'appointments',
+      action: 'none',
+      nextAgent: 'appointments',
+      speak: speakIn(languageState, 'Claro, já verifico isso para si.', 'Of course, I can check that for you.'),
+    };
+  }
+  if (booking) {
+    return {
+      intent: 'booking',
+      action: 'none',
+      nextAgent: 'booking',
+      speak: speakIn(languageState, 'Claro, com todo o gosto. Qual é o motivo da consulta?', 'Of course, I can help with that. What is the reason for the appointment?'),
+    };
+  }
+
+  const info = /\b(hours|opening|open|close|located|location|address|services|parking|weekend|saturday|doctor work|tell me about|horario|morada|onde ficam|servicos|estacionamento|sabado|fim de semana)\b/.test(text);
+  if (info) {
+    return {
+      intent: 'info',
+      action: 'none',
+      nextAgent: 'info',
+      speak: speakIn(languageState, 'Com todo o gosto, diga-me o que gostaria de saber.', 'Of course, what would you like to know?'),
+    };
+  }
+
+  return null;
+}
+
+function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, languageState = 'unknown') {
   const louleDoctors  = cachedDoctors.filter(d => LOULE_DOCTOR_IDS.includes(d.medicId));
   const memoryContext = buildMemoryContext(patientMemory);
 
   switch (agentName) {
-    case 'router':       return routerAgent.buildPrompt(patient, clinicInfo, memoryContext);
-    case 'booking':      return bookingAgent.buildPrompt(patient, clinicInfo, louleDoctors, cachedMotives, memoryContext);
-    case 'appointments': return appointmentsAgent.buildPrompt(patient, clinicInfo, memoryContext);
-    case 'info':         return infoAgent.buildPrompt(patient, clinicInfo, memoryContext);
-    case 'emergency':    return emergencyAgent.buildPrompt(patient, clinicInfo, memoryContext);
-    default:             return routerAgent.buildPrompt(patient, clinicInfo, memoryContext);
+    case 'router':       return routerAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
+    case 'booking':      return bookingAgent.buildPrompt(patient, clinicInfo, louleDoctors, cachedMotives, memoryContext, languageState);
+    case 'appointments': return appointmentsAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
+    case 'info':         return infoAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
+    case 'emergency':    return emergencyAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
+    default:             return routerAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
   }
 }
 
@@ -967,6 +1100,7 @@ async function processTurn({
   callerNumber = null,
   returnToAgent = null,   // agent to return to after a detour (e.g. info → booking)
   returnContext = {},     // saved state: { pendingSlots, bookingReasonText, lastOfferedDate }
+  languageState = 'unknown',
 }) {
   // ── Synthetic auto-speak trigger ─────────────────────────────────────────────
   // When userText === '[continua]' this is an internal trigger (not patient speech).
@@ -987,7 +1121,60 @@ async function processTurn({
     history.push({ role: 'user', content: userText });
   }
 
-  const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory);
+  const nextLanguageState = detectCallerLanguage(userText, languageState);
+  const finalize = (result) => ({ ...result, languageState: nextLanguageState });
+
+  const transferOverride = deterministicTransferOverride(currentAgent, userText, nextLanguageState, patient);
+  if (transferOverride) {
+    const parsed = { speak: transferOverride.speak, action: transferOverride.action || 'none', intent: transferOverride.currentAgent, params: {} };
+    history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+
+    if (transferOverride.action === 'transfer_to_human') {
+      const tSpeak = transferSpeak(patient, nextLanguageState);
+      history.push({ role: 'assistant', content: JSON.stringify({ ...parsed, speak: tSpeak }) });
+      return finalize({
+        speak: tSpeak,
+        action: 'transfer_to_human',
+        history,
+        currentAgent: 'human',
+        unclearTurns: 0,
+        bookingReasonText,
+      });
+    }
+
+    return finalize({
+      speak: transferOverride.speak,
+      action: 'none',
+      history,
+      currentAgent: transferOverride.currentAgent,
+      unclearTurns: 0,
+      bookingReasonText,
+      autoSpeak: currentAgent !== transferOverride.currentAgent,
+    });
+  }
+
+  if (currentAgent === 'router') {
+    const routerDecision = deterministicRouterDecision(userText, nextLanguageState);
+    if (routerDecision) {
+      const parsed = {
+        speak: routerDecision.speak,
+        intent: routerDecision.intent,
+        action: routerDecision.action || 'none',
+        params: {},
+      };
+      history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+      return finalize({
+        speak: routerDecision.speak,
+        action: routerDecision.action || 'none',
+        history,
+        currentAgent: routerDecision.nextAgent,
+        unclearTurns: routerDecision.intent === 'unclear' ? unclearTurns + 1 : 0,
+        bookingReasonText,
+      });
+    }
+  }
+
+  const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState);
 
   const modelStart = Date.now();
   let firstChunkAt = null;
@@ -1273,7 +1460,7 @@ async function processTurn({
     // Patient said goodbye at the very start — hang up gracefully
     if (intent === 'goodbye') {
       history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-      return { speak, action: 'hangup', history, currentAgent: 'router', unclearTurns: 0, bookingReasonText: updatedBookingReasonText };
+      return finalize({ speak, action: 'hangup', history, currentAgent: 'router', unclearTurns: 0, bookingReasonText: updatedBookingReasonText });
     }
 
     if (intent && intent !== 'unclear' && intentMap[intent]) {
@@ -1282,45 +1469,45 @@ async function processTurn({
       history.push({ role: 'assistant', content: JSON.stringify(parsed) });
 
       if (nextAgent === 'human') {
-        const tSpeak = transferSpeak(patient);
+        const tSpeak = transferSpeak(patient, nextLanguageState);
         history.push({ role: 'assistant', content: JSON.stringify({ ...parsed, speak: tSpeak }) });
-        return {
+        return finalize({
           speak: tSpeak,
           action: 'transfer_to_human',
           history,
           currentAgent: 'human',
           unclearTurns: 0,
           bookingReasonText: updatedBookingReasonText,
-        };
+        });
       }
 
-      return { speak, action: 'none', history, currentAgent: nextAgent, unclearTurns: 0, bookingReasonText: updatedBookingReasonText };
+      return finalize({ speak, action: 'none', history, currentAgent: nextAgent, unclearTurns: 0, bookingReasonText: updatedBookingReasonText });
     }
 
     // Intent still unclear — transfer to human after 5 tries (avoids infinite loop)
     const newUnclearTurns = unclearTurns + 1;
     if (newUnclearTurns >= 5) {
       console.log('[Agent] Stuck after 5 unclear turns — transferring to human');
-      const tSpeak = transferSpeak(patient);
+      const tSpeak = transferSpeak(patient, nextLanguageState);
       history.push({ role: 'assistant', content: JSON.stringify({ ...parsed, speak: tSpeak }) });
-      return { speak: tSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0, bookingReasonText: updatedBookingReasonText };
+      return finalize({ speak: tSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0, bookingReasonText: updatedBookingReasonText });
     }
 
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-    return { speak, action: 'none', history, currentAgent: 'router', unclearTurns: newUnclearTurns, bookingReasonText: updatedBookingReasonText };
+    return finalize({ speak, action: 'none', history, currentAgent: 'router', unclearTurns: newUnclearTurns, bookingReasonText: updatedBookingReasonText });
   }
 
   // ── 2. TRANSFER ACTIONS ───────────────────────────────────
   if (action === 'transfer_to_human') {
-    const tSpeak = transferSpeak(patient);
+    const tSpeak = transferSpeak(patient, nextLanguageState);
     history.push({ role: 'assistant', content: JSON.stringify({ ...parsed, speak: tSpeak }) });
-    return {
+    return finalize({
       speak: tSpeak,
       action: 'transfer_to_human',
       history,
       currentAgent: 'human',
       bookingReasonText: updatedBookingReasonText,
-    };
+    });
   }
 
   // ── Silent inter-agent transfers ──────────────────────────────────────
@@ -1399,7 +1586,7 @@ async function processTurn({
 
   if (action === 'hangup') {
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-    return { speak, action: 'hangup', history, currentAgent, bookingReasonText: updatedBookingReasonText };
+    return finalize({ speak, action: 'hangup', history, currentAgent, bookingReasonText: updatedBookingReasonText });
   }
 
   // ── 3. API ACTIONS — execute + format programmatically ────
@@ -1433,7 +1620,7 @@ async function processTurn({
             history.push({ role: 'system', content: `Consultas do paciente:\n${formatted._appointmentsContext}\n\nUsa os valores [ref:ID] apenas server-side para cancel_appointment. NUNCA reveles IDs ao paciente.` });
           }
           history.push({ role: 'assistant', content: JSON.stringify({ speak: formatted.speak, action: formatted.action || 'none', params: {} }) });
-          return {
+          return finalize({
             speak:           formatted.speak,
             action:          formatted.action || 'none',
             actionFired:     action,
@@ -1444,22 +1631,22 @@ async function processTurn({
             lastOfferedDate: actionResult.lastOfferedDate ?? lastOfferedDate,
             bookingReasonText: updatedBookingReasonText,
             patient:         actionResult.patient,
-          };
+          });
         }
       }
     } catch (err) {
       console.error(`[Agent:${currentAgent}] Action error:`, err.message);
       // On any API/booking error → transfer to human with a warm apology
-      const tSpeak = transferSpeak(patient);
+      const tSpeak = transferSpeak(patient, nextLanguageState);
       const errSpeak = `Peço desculpa — não foi possível concluir a operação no nosso sistema. ${tSpeak}`;
       history.push({ role: 'assistant', content: JSON.stringify({ speak: errSpeak, action: 'transfer_to_human' }) });
-      return { speak: errSpeak, action: 'transfer_to_human', history, currentAgent: 'human', bookingReasonText: updatedBookingReasonText };
+      return finalize({ speak: errSpeak, action: 'transfer_to_human', history, currentAgent: 'human', bookingReasonText: updatedBookingReasonText });
     }
   } else {
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
   }
 
-  return { speak, action, history, currentAgent: nextAgent, bookingReasonText: updatedBookingReasonText };
+  return finalize({ speak, action, history, currentAgent: nextAgent, bookingReasonText: updatedBookingReasonText });
 }
 
 module.exports = { processTurn, generateCallSummary };
