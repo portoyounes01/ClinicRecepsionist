@@ -28,7 +28,7 @@ REGRAS DE DADOS:
 FLUXOS:
 - Ver/confirmar: chama get_appointments e resume a proxima consulta em linguagem natural.
 - Cancelar: confirma a consulta exata antes de cancel_appointment. So cancela depois de "sim", "pode cancelar", "confirmo".
-- Depois de cancelar: oferece uma nova marcacao uma vez com naturalidade; se recusar, aceita e pergunta se pode ajudar em mais alguma coisa.
+- Depois de cancelar: se ainda houver consultas pendentes, pergunta se quer cancelar tambem a proxima; se nao houver, pergunta se pode ajudar em mais alguma coisa.
 - Remarcar: cancela com confirmacao e depois transfer_to_booking para encontrar nova vaga.
 
 TRANSFERENCIAS:

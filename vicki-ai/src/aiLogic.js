@@ -570,6 +570,21 @@ function formatActionResponse(action, actionResult) {
 
 
     case 'cancel_appointment':
+      if (actionResult.cancelled && actionResult.remainingAppointments?.length) {
+        const next = actionResult.remainingAppointments[0];
+        return {
+          speak: `Pronto, essa consulta esta cancelada. Ainda tem ${actionResult.remainingAppointments.length} consulta${actionResult.remainingAppointments.length > 1 ? 's' : ''} marcada${actionResult.remainingAppointments.length > 1 ? 's' : ''}. Quer cancelar tambem a proxima, ${next.display}?`,
+          action: 'none',
+          pendingAppointments: actionResult.remainingAppointments,
+        };
+      }
+      if (actionResult.cancelled && actionResult.remainingAppointments) {
+        return {
+          speak: `Pronto, esta cancelado. Nao vejo mais consultas marcadas. Posso ajudar em mais alguma coisa?`,
+          action: 'none',
+          pendingAppointments: [],
+        };
+      }
       if (!actionResult.cancelled) {
         return {
           speak: `Peço desculpa, não foi possível cancelar no nosso sistema. Um momento — vou ligá-lo/a com alguém da nossa equipa que trata disto para si.`,
@@ -935,10 +950,14 @@ async function executeAction(action, params, patient, callerNumber, history = []
     case 'cancel_appointment': {
       // Resolve real appointmentId server-side from pendingAppts — never trust AI-provided ID
       let resolvedId = params.appointmentId;
+      let cancelledAppt = null;
       if (params._pendingAppts && params._pendingAppts.length > 0) {
         const match = params._pendingAppts.find(a => String(a.appointmentId) === String(params.appointmentId))
           || params._pendingAppts[0]; // default to first if only one
-        if (match) resolvedId = match.appointmentId;
+        if (match) {
+          resolvedId = match.appointmentId;
+          cancelledAppt = match;
+        }
       }
       const result = await newsoft.cancelAppointment({
         appointmentId: resolvedId,
@@ -950,7 +969,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
 
       // Fire-and-forget SMS cancellation notification
       if (patient) {
-        const cancelledAppt = params._pendingAppts?.find(a => String(a.appointmentId) === String(resolvedId));
+        cancelledAppt = cancelledAppt || params._pendingAppts?.find(a => String(a.appointmentId) === String(resolvedId));
         sendCancellationConfirmation({
           patientName: patient.patientName,
           phoneNumber: callerNumber || patient.patientPhoneNumber,
@@ -961,7 +980,10 @@ async function executeAction(action, params, patient, callerNumber, history = []
         }).catch(err => console.error('[SMS] Cancel SMS failed:', err.message));
       }
 
-      return { cancelled: true };
+      const remainingAppointments = (params._pendingAppts || [])
+        .filter(a => String(a.appointmentId) !== String(resolvedId));
+
+      return { cancelled: true, cancelledAppointment: cancelledAppt, remainingAppointments };
     }
 
     default:

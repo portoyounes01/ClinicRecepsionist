@@ -550,7 +550,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       if (result.currentAgent   !== undefined) currentAgent   = result.currentAgent;
       if (result.unclearTurns   !== undefined) unclearTurns   = result.unclearTurns;
       if (result.pendingSlots   && result.pendingSlots.length)  pendingSlots  = result.pendingSlots;
-      if (result.pendingAppts   && result.pendingAppts.length)  pendingAppts  = result.pendingAppts;
+      if (result.pendingAppts   !== undefined) pendingAppts  = result.pendingAppts;
       if (result.lastOfferedDate !== undefined) lastOfferedDate = result.lastOfferedDate;
       if (result.bookingReasonText !== undefined) bookingReasonText = result.bookingReasonText;
       // Resume context: when returning from info/emergency back to booking, restore slots
@@ -676,7 +676,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           if (autoResult.languageState !== undefined) languageState = autoResult.languageState;
           if (autoResult.currentAgent   !== undefined) currentAgent   = autoResult.currentAgent;
           if (autoResult.pendingSlots   && autoResult.pendingSlots.length)  pendingSlots  = autoResult.pendingSlots;
-          if (autoResult.pendingAppts   && autoResult.pendingAppts.length)  pendingAppts  = autoResult.pendingAppts;
+          if (autoResult.pendingAppts   !== undefined) pendingAppts  = autoResult.pendingAppts;
           if (autoResult.bookingReasonText !== undefined) bookingReasonText = autoResult.bookingReasonText;
           if (autoResult.lastOfferedDate !== undefined) lastOfferedDate = autoResult.lastOfferedDate;
           if (autoResult.returnToAgent) { returnToAgent = autoResult.returnToAgent; returnContext = autoResult.returnContext || {}; }
