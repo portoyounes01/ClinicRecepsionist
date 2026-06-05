@@ -79,6 +79,47 @@ function isBackchannel(text) {
   return BACKCHANNEL_RE.test((text || '').trim());
 }
 
+// ── Smart endpointing ────────────────────────────────────────────────────────
+// Soniox fires <end> after a short silence. If the caller is just pausing to think,
+// that silence can cut them off and Vicki answers/repeats prematurely. So when the
+// phrase LOOKS unfinished (ends on a connector/preposition/filler), we wait a brief
+// grace for them to continue; complete-sounding phrases still fire instantly (speed).
+const ENDPOINT_GRACE_MS = Math.max(0, parseInt(process.env.ENDPOINT_GRACE_MS || '700', 10));
+
+const _norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
+
+// Words that, when they are the LAST word spoken, signal "I'm not done yet."
+const DANGLING_WORDS = new Set([
+  // PT connectors / prepositions / articles
+  'e','ou','mas','que','de','do','da','dos','das','no','na','nos','nas','para','pra','por','com','sem',
+  'a','o','os','as','um','uma','uns','umas','em','ao','aos','se','quando','onde','porque','entao','tipo','assim','minha','meu','meus','minhas',
+  // EN connectors / prepositions / articles
+  'and','or','but','that','of','to','for','with','without','an','the','in','on','at','my','your','its',
+  'is','it','so','like','because','when','where','i','we','a',
+]);
+// Trailing fillers (any language) → also "not done"
+const TRAILING_FILLER_RE = /\b(uh+|um+|eh+|er+|hmm+|hum+|well|so)$/;
+
+function looksIncomplete(text) {
+  const t = _norm(text);
+  if (!t) return true;
+  if (TRAILING_FILLER_RE.test(t)) return true;
+  const words = t.split(' ');
+  const last  = words[words.length - 1].replace(/[.,!?;:]+$/, '');
+  return DANGLING_WORDS.has(last);
+}
+
+// Merge a freshly-finalized segment into the running turn, tolerant of whether
+// Soniox sends a cumulative interim or resets to a new segment after <end>.
+function mergeTurn(prev, seg) {
+  const p = (prev || '').trim(), s = (seg || '').trim();
+  if (!p) return s;
+  if (!s) return p;
+  if (s.startsWith(p) || s.includes(p)) return s;  // cumulative — seg already contains prev
+  if (p.endsWith(s)) return p;                     // duplicate tail
+  return `${p} ${s}`;                              // new segment — append
+}
+
 function clearTelnyxAudio(telnyxWs, reason = '') {
   if (telnyxWs?.readyState !== 1) return;
   telnyxWs.send(JSON.stringify({ event: 'clear' }));
@@ -248,6 +289,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let returnToAgent       = null;   // agent to resume after info/insurance detour
   let returnContext       = {};     // saved pendingSlots + bookingReason for resume
   let languageState       = 'unknown';
+
+  // ── Smart endpointing state ───────────────────────────────────────────────
+  let turnBuffer          = '';     // accumulates the caller's words across thinking pauses
+  let endpointGraceTimer  = null;   // pending grace wait when a phrase sounds unfinished
 
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
@@ -448,7 +493,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         clearTimeout(processingTimer); processingTimer = null;
         currentAbort('barge-in'); currentAbort = null; isSpeaking = false;
       }
-      lastInterimText = ''; pendingTranscript = '';
+      lastInterimText = ''; pendingTranscript = ''; turnBuffer = '';
+      if (endpointGraceTimer) { clearTimeout(endpointGraceTimer); endpointGraceTimer = null; }
       return;
     }
 
@@ -459,26 +505,53 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         console.log(`[STT] interim: "${transcript}"`);
       }
       pendingTranscript = transcript;
+      // Caller resumed talking during a grace wait → cancel it; a new <end> will follow.
+      if (endpointGraceTimer) {
+        clearTimeout(endpointGraceTimer); endpointGraceTimer = null;
+        console.log('[STT] caller resumed — endpoint grace cancelled');
+      }
     }
 
-    // ── END TOKEN: fire AI immediately ───────────────────────────────
-    // Soniox sends <end> when endpoint detection detects end-of-speech.
-    // This is the fastest, most accurate trigger — no debounce needed.
-    if (endToken && pendingTranscript) {
-      clearTimeout(processingTimer);
-      processingTimer = null;
-      const userText    = pendingTranscript.trim();
+    // ── END TOKEN: decide whether the turn is really finished ─────────────────
+    // Soniox sends <end> after a short silence. Fire immediately when the phrase
+    // sounds complete; wait a brief grace when it sounds unfinished (thinking pause).
+    if (endToken && (pendingTranscript || turnBuffer)) {
+      clearTimeout(processingTimer); processingTimer = null;
+      turnBuffer = mergeTurn(turnBuffer, pendingTranscript);
       pendingTranscript = '';
       lastInterimText   = '';
-      if (!userText) return;
+      const candidate = turnBuffer.trim();
+      if (!candidate) return;
+
+      // Low confidence + very short → ask to repeat (unchanged behavior).
       if (confidence < 0.55 && wordCount <= 4) {
-        console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat: "${userText}"`);
+        console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat: "${candidate}"`);
+        turnBuffer = '';
         isSpeaking = true;
         speakToCaller(languageState === 'en' ? 'Sorry, I didn\'t quite catch that. Could you repeat, please?' : 'Desculpe, não percebi bem. Pode repetir, por favor?', () => { isSpeaking = false; currentAbort = null; });
         return;
       }
-      console.log(`[STT] ENDPOINT DETECTED → AI Processing: "${userText}"`);
-      runTurn(userText);
+
+      if (looksIncomplete(candidate)) {
+        console.log(`[STT] Phrase sounds unfinished — waiting ${ENDPOINT_GRACE_MS}ms: "${candidate}"`);
+        clearTimeout(endpointGraceTimer);
+        endpointGraceTimer = setTimeout(() => {
+          endpointGraceTimer = null;
+          if (isSpeaking || processingTurn) { turnBuffer = ''; return; }
+          const finalText = turnBuffer.trim();
+          turnBuffer = ''; pendingTranscript = ''; lastInterimText = '';
+          if (!finalText) return;
+          console.log(`[STT] Grace elapsed → AI Processing: "${finalText}"`);
+          runTurn(finalText);
+        }, ENDPOINT_GRACE_MS);
+        return;
+      }
+
+      // Sounds complete → fire now (no added latency).
+      clearTimeout(endpointGraceTimer); endpointGraceTimer = null;
+      turnBuffer = '';
+      console.log(`[STT] ENDPOINT DETECTED → AI Processing: "${candidate}"`);
+      runTurn(candidate);
     }
   }  // end handleSonioxMessage
 
@@ -956,6 +1029,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     console.log('[Call] Closed');
     clearTimeout(maxDurationWatchdog);
     clearInterval(silenceWatchdog);
+    if (endpointGraceTimer) { clearTimeout(endpointGraceTimer); endpointGraceTimer = null; }
     try { if (sonioxWs) { sonioxWs.close(); sonioxWs = null; } } catch (_) {}
   });
 
