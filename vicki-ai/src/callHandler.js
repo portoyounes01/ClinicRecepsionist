@@ -993,14 +993,16 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
               if (firstName && patientMemory?.totalCalls > 0) {
                 // Returning patient — go straight to the point, warm and personal
                 greeting = greetEn
-                  ? `Hi ${firstName}! Lovely to hear from you — how can I help today?`
-                  : `Olá ${firstName}! Que bom ouvir a sua voz — em que posso ajudar hoje?`;
+                  ? `Hi ${firstName}! You've reached Instituto Vilas Boas in Loulé — lovely to hear from you. How can I help today?`
+                  : `Olá ${firstName}! Ligou para o Instituto Vilas Boas em Loulé — que bom ouvir a sua voz. Em que posso ajudar hoje?`;
               } else if (firstName) {
                 greeting = greetEn
-                  ? `Hi ${firstName}! I'm Vicki, the virtual assistant at Instituto Vilas Boas. How can I help?`
-                  : `Olá ${firstName}! Sou a Vicki, a assistente virtual do Instituto Vilas Boas. Em que posso ajudar?`;
+                  ? `Hi ${firstName}! I'm Vicki, the virtual assistant at Instituto Vilas Boas in Loulé. How can I help?`
+                  : `Olá ${firstName}! Sou a Vicki, a assistente virtual do Instituto Vilas Boas em Loulé. Em que posso ajudar?`;
               } else {
-                greeting = `Olá! Sou a Vicki, a assistente virtual do Instituto Vilas Boas. Em que posso ajudar?`;
+                greeting = greetEn
+                  ? `Hello! I'm Vicki, the virtual assistant at Instituto Vilas Boas in Loulé. How can I help?`
+                  : `Olá! Sou a Vicki, a assistente virtual do Instituto Vilas Boas em Loulé. Em que posso ajudar?`;
               }
 
               isSpeaking = true;
@@ -1010,7 +1012,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
               console.error('[Startup] Error:', err.message);
               isSpeaking = true;
               speakToCaller(
-                "Olá! Sou a Vicki, a assistente virtual do Instituto Vilas Boas. Em que posso ajudar?",
+                "Olá! Sou a Vicki, a assistente virtual do Instituto Vilas Boas em Loulé. Em que posso ajudar?",
                 () => { isSpeaking = false; currentAbort = null; }
               );
             }

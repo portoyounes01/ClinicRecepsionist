@@ -74,7 +74,7 @@ async function sendBookingConfirmation({ patientName, phoneNumber, displayDate, 
   const reason  = reasonText || '';
 
   const lines = [
-    `Instituto Vilas Boas confirma a sua marcacao de consulta.`,
+    `Instituto Vilas Boas (Loule) confirma a sua marcacao de consulta.`,
     `Data: ${dateStr}`,
     `Hora: ${timeStr}`,
     `Medico: ${medicName || ''}`,
@@ -101,7 +101,7 @@ async function sendCancellationConfirmation({ patientName, phoneNumber, displayD
   const timePart   = timeStr   ? ` as ${timeStr}` : '';
 
   const text = [
-    `Instituto Vilas Boas confirma o cancelamento da sua consulta${doctorPart}${datePart}${timePart}.`,
+    `Instituto Vilas Boas (Loule) confirma o cancelamento da sua consulta${doctorPart}${datePart}${timePart}.`,
     ``,
     `Para remarcar, contacte atraves do ${CLINIC_PHONE}.`,
   ].join('\n');

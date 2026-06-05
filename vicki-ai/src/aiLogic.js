@@ -754,15 +754,17 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         // Recompute the date/time label in the caller's language (stored labels are pt-PT).
         const bs = actionResult.bookedSlot;
         const t  = (bs && bs.date && bs.time) ? humanSlot(bs.date + 'T' + bs.time, lang) : null;
+        const smsLineEn = actionResult.smsSent ? ` I've just sent you a confirmation by text.` : '';
+        const smsLinePt = actionResult.smsSent ? ` Acabei de lhe enviar a confirmação por mensagem.` : '';
         let confirmSpeak;
         if (en) {
           confirmSpeak = (bs && t)
-            ? `Perfect — you're all booked! We'll see you ${t.dayName} at ${t.timeStr} with ${bs.medicName}. Is there anything else I can help with?`
-            : `Perfect — you're all booked! We look forward to seeing you. Is there anything else I can help with?`;
+            ? `Perfect — you're all booked at Instituto Vilas Boas in Loulé! We'll see you ${t.dayName} at ${t.timeStr} with ${bs.medicName}.${smsLineEn} Is there anything else I can help with?`
+            : `Perfect — you're all booked at Instituto Vilas Boas in Loulé!${smsLineEn} Is there anything else I can help with?`;
         } else {
           confirmSpeak = (bs && t)
-            ? `Perfeito — está tudo marcado! Esperamo-lo/a ${t.dayName} às ${t.timeStr} com ${bs.medicName}. Posso ajudar em mais alguma coisa?`
-            : `Perfeito — está tudo marcado! Esperamo-lo/a com muito gosto. Posso ajudar em mais alguma coisa?`;
+            ? `Perfeito — está tudo marcado no Instituto Vilas Boas em Loulé! Esperamo-lo/a ${t.dayName} às ${t.timeStr} com ${bs.medicName}.${smsLinePt} Posso ajudar em mais alguma coisa?`
+            : `Perfeito — está tudo marcado no Instituto Vilas Boas em Loulé!${smsLinePt} Posso ajudar em mais alguma coisa?`;
         }
         return { speak: confirmSpeak, action: 'none' };
       }
@@ -1214,8 +1216,9 @@ async function executeAction(action, params, patient, callerNumber, history = []
       console.log(`[Booking] ✅ Confirmed appointmentId: ${booked[0]?.appointmentId}`);
 
       // Fire-and-forget SMS confirmation (don't block the call)
-      if (chosenSlot && patientForBooking) {
-        const smsPhone = callerNumber || patientForBooking.patientPhoneNumber;
+      const smsPhone = callerNumber || patientForBooking?.patientPhoneNumber;
+      const smsSent = !!(chosenSlot && patientForBooking && smsPhone);
+      if (smsSent) {
         sendBookingConfirmation({
           patientName: patientForBooking.patientName,
           phoneNumber: smsPhone,
@@ -1231,6 +1234,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
       return {
         appointmentId: booked[0]?.appointmentId,
         bookedSlot:    chosenSlot,   // passed back so confirmation speaks correct doctor/time
+        smsSent,                     // so the spoken confirmation only claims a text if one went out
         patient: patientForBooking,
         patientCreated: patientResolution.created,
         patientResolvedExisting: patientResolution.resolvedExisting,
