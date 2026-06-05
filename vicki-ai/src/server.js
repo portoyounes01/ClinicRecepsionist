@@ -45,6 +45,64 @@ function buildSilenceWav(seconds = 5) {
 const SILENCE_WAV = buildSilenceWav(5);
 
 // ─────────────────────────────────────────────
+// Ringback tone generator
+// Portuguese PSTN ringback: 400Hz + 450Hz dual tone
+// Pattern: 1s ring ON, 4s ring OFF (repeated)
+// Served at /ringback.wav — played before stream connects
+// so the caller hears a normal ring before Vicki answers.
+// ─────────────────────────────────────────────
+function buildRingbackWav(ringCount = 1) {
+  const sampleRate  = 8000;
+  const onSamples   = sampleRate * 1;   // 1s ring
+  const offSamples  = sampleRate * 4;   // 4s silence
+  const cycleTotal  = onSamples + offSamples;
+  const totalSamples = cycleTotal * ringCount;
+
+  // 16-bit PCM WAV
+  const dataBytes = totalSamples * 2;
+  const buf = Buffer.alloc(44 + dataBytes);
+
+  // WAV header
+  buf.write('RIFF',  0);
+  buf.writeUInt32LE(36 + dataBytes, 4);
+  buf.write('WAVE',  8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1,  20);              // PCM
+  buf.writeUInt16LE(1,  22);              // Mono
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 2, 28);  // byte rate
+  buf.writeUInt16LE(2,  32);              // block align
+  buf.writeUInt16LE(16, 34);              // bits/sample
+  buf.write('data', 36);
+  buf.writeUInt32LE(dataBytes, 40);
+
+  // Generate dual-tone (400Hz + 450Hz) for ON segments, silence for OFF
+  const amp = 10000;
+  for (let i = 0; i < totalSamples; i++) {
+    const posInCycle = i % cycleTotal;
+    let sample = 0;
+    if (posInCycle < onSamples) {
+      const t = i / sampleRate;
+      sample = Math.round(amp * (Math.sin(2 * Math.PI * 400 * t) + Math.sin(2 * Math.PI * 450 * t)) / 2);
+    }
+    buf.writeInt16LE(sample, 44 + i * 2);
+  }
+  return buf;
+}
+const RINGBACK_WAV = buildRingbackWav(2); // 2 rings = ~10s max wait, stream connects before it ends
+
+// ─────────────────────────────────────────────
+// RINGBACK WAV — served to Telnyx <Play> before stream connects
+// ─────────────────────────────────────────────
+app.get('/ringback.wav', (req, res) => {
+  res.set('Content-Type', 'audio/wav');
+  res.set('Content-Length', RINGBACK_WAV.length);
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.send(RINGBACK_WAV);
+});
+
+// ─────────────────────────────────────────────
 // TELNYX WEBHOOK — Called when a call comes in
 // ─────────────────────────────────────────────
 app.post('/telnyx/inbound', (req, res) => {
@@ -56,15 +114,19 @@ app.post('/telnyx/inbound', (req, res) => {
   console.log(`[Telnyx] Inbound call | From: ${from} | To: ${to} | Status: ${status} | SID: ${callSid}`);
   console.log(`[Telnyx] Inbound raw body:`, JSON.stringify(req.body));
 
-  const host  = req.headers['x-forwarded-host'] || req.headers.host;
-  const wsUrl = `wss://${host}/media`;
+  const host    = req.headers['x-forwarded-host'] || req.headers.host;
+  const wsUrl   = `wss://${host}/media`;
   const baseUrl = `https://${host}`;
 
   console.log(`[Telnyx] Streaming audio to: ${wsUrl}`);
 
-  // Start the stream + keep-alive loop via redirect
+  // Play 1 ringback cycle (~5s) before connecting the stream.
+  // Caller hears a normal ring, then Vicki greets them.
+  // The Play and Stream run concurrently — stream opens while ring plays,
+  // so Vicki is ready immediately when the ring ends.
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+  <Play loop="1">${baseUrl}/ringback.wav</Play>
   <Start>
     <Stream url="${wsUrl}">
       <Parameter name="callerNumber" value="${from}" />
