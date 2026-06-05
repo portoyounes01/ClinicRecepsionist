@@ -25,6 +25,27 @@ const openai  = new OpenAI({
   apiKey:     process.env.OPENAI_API_KEY,
   httpAgent:  new https.Agent({ keepAlive: true }),
 });
+
+// ── Slot result cache (60s TTL) ────────────────────────────────────────────
+// Avoids re-hitting Newsoft when patient asks follow-up slot questions within
+// the same call ("what about the afternoon?", "any other times?").
+const _slotCache = new Map();
+function _slotCacheKey(medicId, motiveId, dateFrom, dateTo) {
+  return `${medicId || '*'}|${motiveId || '*'}|${dateFrom}|${dateTo}`;
+}
+function _slotCacheGet(key) {
+  const entry = _slotCache.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > 60000) { _slotCache.delete(key); return null; }
+  return entry.value;
+}
+function _slotCacheSet(key, value) {
+  _slotCache.set(key, { value, ts: Date.now() });
+  if (_slotCache.size > 50) {
+    const oldest = [..._slotCache.entries()].sort((a, b) => a[1].ts - b[1].ts)[0];
+    if (oldest) _slotCache.delete(oldest[0]);
+  }
+}
 const { LOULE_DOCTOR_IDS } = bookingAgent;
 const LIVE_AGENT_MODEL = 'gpt-5.4-mini';
 
@@ -854,12 +875,15 @@ async function executeAction(action, params, patient, callerNumber, history = []
 
       console.log(`[Newsoft] slot search window: ${dateFrom}..${dateTo}${periodPref ? ` period=${periodPref}` : ''}${pref?.exact ? ' (exact day)' : ''}${isUrgent ? ' [URGENT]' : ''}`);
 
-      const raw = await newsoft.getAvailableSlots({
-        medicId,
-        motiveId,
-        dateFrom,
-        dateTo,
-      });
+      const cacheKey = _slotCacheKey(medicId, motiveId, dateFrom, dateTo);
+      let raw = _slotCacheGet(cacheKey);
+      if (raw) {
+        console.log(`[Newsoft] slot cache HIT: ${cacheKey} (${raw.length} slots)`);
+      } else {
+        raw = await newsoft.getAvailableSlots({ medicId, motiveId, dateFrom, dateTo });
+        if (raw.length) _slotCacheSet(cacheKey, raw);
+        console.log(`[Newsoft] slot cache MISS: fetched ${raw.length} slots`);
+      }
       if (!raw.length) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: !!medicId, exact: !!(pref && pref.exact), urgent: isUrgent };
 
       // Honor a stated period (manhã/tarde) when slots exist for it; otherwise show all.
@@ -1836,7 +1860,79 @@ async function processTurn({
         });
       }
 
-      return finalize({ speak, action: 'none', history, currentAgent: nextAgent, unclearTurns: 0, bookingReasonText: updatedBookingReasonText });
+      // ── ROUTER COLLAPSE: instead of returning autoSpeak (2nd LLM call), run the
+      // specialist agent immediately in the same turn. Saves ~800–1500ms per routed call.
+      // The router's bridge phrase (speak) was already fired via onSpeakReady above;
+      // we now immediately follow through with the specialist's first response.
+      console.log(`[Agent] Router collapse: running ${nextAgent} inline (no 2nd LLM hop)`);
+      const specialistPrompt = getAgentPrompt(nextAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState);
+      const specialistStart = Date.now();
+      let sFirstChunkAt = null, sFullText = '', sSpeakFired = false, sFinishReason = null;
+
+      const specialistStream = await openai.chat.completions.create({
+        model:            LIVE_AGENT_MODEL,
+        messages:         [{ role: 'system', content: specialistPrompt }, ...history],
+        temperature:      0.3,
+        max_completion_tokens: 300,
+        reasoning_effort: 'none',
+        response_format:  { type: 'json_object' },
+        stream:           true,
+      });
+
+      for await (const chunk of specialistStream) {
+        if (!sFirstChunkAt) sFirstChunkAt = Date.now();
+        sFinishReason = chunk.choices[0]?.finish_reason || sFinishReason;
+        sFullText += chunk.choices[0]?.delta?.content || '';
+        if (!sSpeakFired) {
+          const m = sFullText.match(/"speak"\s*:\s*"((?:[^"\\]|\\.)*)"/s);
+          if (m) {
+            const earlySpeak = m[1].replace(/\\n/g,' ').replace(/\\r/g,'').replace(/\\t/g,' ').replace(/\\"/g,'"').replace(/\\\\/g,'\\');
+            sSpeakFired = true;
+            if (earlySpeak && onSpeakReady) onSpeakReady(earlySpeak);
+          }
+        }
+      }
+      console.log(`[AI] Specialist inline | model=${LIVE_AGENT_MODEL} agent=${nextAgent} first_chunk_ms=${sFirstChunkAt ? sFirstChunkAt - specialistStart : 'none'} total_ms=${Date.now() - specialistStart}`);
+
+      let sParsed;
+      try { sParsed = JSON.parse(sFullText.trim()); }
+      catch (_) { sParsed = { speak: speak || "Como posso ajudar?", action: 'none', params: {} }; }
+
+      const sSpeak  = sParsed.speak  || speak;
+      const sAction = sParsed.action || 'none';
+      const sParams = sParsed.params || {};
+      const sUpdatedReason = inferBookingReasonText(userText, sParams, updatedBookingReasonText);
+
+      const sGuarded = applyBookingStateGuard({ currentAgent: nextAgent, action: sAction, speak: sSpeak, params: sParams, userText, pendingSlots, history, bookingReasonText: sUpdatedReason });
+
+      history.push({ role: 'assistant', content: JSON.stringify({ speak: sGuarded.speak, action: sGuarded.action, params: sGuarded.params }) });
+
+      // Handle API actions from specialist
+      if (sGuarded.action && sGuarded.action !== 'none' && sGuarded.action !== 'hangup') {
+        try {
+          const enrichedSParams = sGuarded.action === 'check_slots'
+            ? { ...sGuarded.params, _lastOfferedDate: lastOfferedDate, _slotSearchDirection: 'later', _datePref: resolveDatePreference(userText, new Date().toISOString().split('T')[0]), _bookingReasonText: sUpdatedReason }
+            : sGuarded.action === 'book_appointment'
+              ? { ...sGuarded.params, _pendingSlots: pendingSlots, _bookingReasonText: sUpdatedReason }
+              : sGuarded.action === 'cancel_appointment'
+                ? { ...sGuarded.params, _pendingAppts: pendingAppts }
+                : sGuarded.params;
+          const sActionResult = await executeAction(sGuarded.action, enrichedSParams, patient, callerNumber, history, nextLanguageState);
+          if (sActionResult) {
+            const sFormatted = formatActionResponse(sGuarded.action, sActionResult, nextLanguageState);
+            if (sFormatted) {
+              if (sFormatted._slotsContext) history.push({ role: 'system', content: `Slots disponíveis encontrados:\n${sFormatted._slotsContext}\n\nUsa o slotBase64 correto quando o paciente confirmar.` });
+              if (sFormatted._appointmentsContext) history.push({ role: 'system', content: `Consultas do paciente:\n${sFormatted._appointmentsContext}` });
+              history.push({ role: 'assistant', content: JSON.stringify({ speak: sFormatted.speak, action: sFormatted.action || 'none', params: {} }) });
+              return { ...finalize({ speak: sFormatted.speak, action: sFormatted.action || 'none', history, currentAgent: nextAgent, unclearTurns: 0, bookingReasonText: sUpdatedReason }), actionFired: sGuarded.action, pendingSlots: sFormatted.pendingSlots, pendingAppts: sFormatted.pendingAppointments, lastOfferedDate: sActionResult.lastOfferedDate ?? lastOfferedDate, patient: sActionResult.patient };
+            }
+          }
+        } catch (sErr) {
+          console.error(`[Agent:${nextAgent}] Inline action error:`, sErr.message);
+        }
+      }
+
+      return finalize({ speak: sGuarded.speak, action: sGuarded.action, history, currentAgent: nextAgent, unclearTurns: 0, bookingReasonText: sUpdatedReason });
     }
 
     // Intent still unclear — transfer to human after 5 tries (avoids infinite loop)

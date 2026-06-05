@@ -176,9 +176,9 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
       process.env.ELEVENLABS_VOICE_ID,
       {
         text,
-        model_id:                   'eleven_turbo_v2_5',
+        model_id:                   'eleven_flash_v2_5',
         output_format:              'pcm_8000',
-        optimize_streaming_latency:  3,
+        optimize_streaming_latency:  4,
         voice_settings: { stability: 0.5, similarity_boost: 0.8 },
       }
     );
@@ -420,7 +420,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         language_hints:           ['pt', 'en'],
         enable_interim_results:   true,
         enable_endpoint_detection: true,              // KEY: sends <end> token on silence → instant trigger
-        max_endpoint_delay_ms:    800,                // max wait before forcing endpoint (500-3000ms)
+        max_endpoint_delay_ms:    500,                // max wait before forcing endpoint (500-3000ms)
         context: {
           entries: contextWords.map(w => ({ value: w })),
         },
