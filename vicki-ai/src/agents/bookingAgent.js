@@ -35,6 +35,7 @@ FLUXO OBRIGATORIO:
 3. Disponibilidade: chama check_slots com motiveId, reasonText, dateFrom se o paciente pediu data, e medicId se houver preferencia.
 4. Slots: quando o sistema devolver slots, usa exatamente displayDate, displayTime, period, medicName e slotBase64.
 5. Escolha: se houver 2 opcoes e o paciente disser so "sim", pergunta qual prefere; se houver 1 opcao, "sim" confirma.
+   - Se o paciente disser "primeira", "segunda", "first one", "second option", etc., chama book_appointment com chosenSlotIndex 1, 2, 3... conforme a opcao escolhida.
 6. Marcacao: depois da confirmacao, chama book_appointment imediatamente. Novo paciente precisa de patientName antes.
 7. Pos-marcacao: depois de confirmado pelo sistema, pergunta se pode ajudar em mais alguma coisa. Nao desligues ate despedida clara.
 
@@ -71,6 +72,7 @@ DEVOLVE APENAS JSON VALIDO:
     "patientName": "Nome Completo",
     "patientEmail": "paciente@exemplo.pt",
     "patientNif": "123456789",
+    "chosenSlotIndex": 2,
     "chosenPeriod": "morning|afternoon|manha|tarde"
   }
 }`;

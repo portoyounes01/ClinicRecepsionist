@@ -144,6 +144,37 @@ function inferLatestExplicitPeriodFromUser(history = [], params = {}) {
   return latest;
 }
 
+function inferLatestExplicitSlotOrdinal(history = [], params = {}) {
+  const sources = [];
+  for (const key of ['chosenSlotIndex', 'slotIndex', 'choiceIndex', 'choice']) {
+    if (params[key] !== undefined && params[key] !== null) {
+      sources.push({ text: String(params[key]), source: `params.${key}` });
+    }
+  }
+  for (const m of (history || []).filter(m => m.role === 'user').slice(-8)) {
+    sources.push({ text: m.content || '', source: 'user' });
+  }
+
+  let latest = null;
+  for (const item of sources) {
+    const text = normalizeForIntent(item.text);
+    if (!text) continue;
+    let index = null;
+
+    if (/^\d+$/.test(text)) index = parseInt(text, 10) - 1;
+    if (/\b(primeir[ao]|1(?:st)?|numero um|opcao um|slot um|first(?: one)?|first option)\b/.test(text)) index = 0;
+    if (/\b(segund[ao]|2(?:nd)?|numero dois|opcao dois|slot dois|second(?: one)?|second option|the second|a segunda|o segundo)\b/.test(text)) index = 1;
+    if (/\b(terceir[ao]|3(?:rd)?|numero tres|opcao tres|slot tres|third(?: one)?|third option)\b/.test(text)) index = 2;
+    if (/\b(ultim[ao]|last(?: one)?|last option)\b/.test(text)) index = -1;
+
+    const numeric = text.match(/\b(?:opcao|slot|numero|option|choice)\s*(\d+)\b/);
+    if (numeric) index = parseInt(numeric[1], 10) - 1;
+
+    if (index !== null) latest = { index, source: item.source, text: item.text };
+  }
+  return latest;
+}
+
 function humanSlot(isoString) {
   // IMPORTANT: Newsoft returns local Lisbon time (e.g. '2026-06-18T14:00:00') with NO timezone suffix.
   // Using new Date() would treat it as UTC and add +1h offset. Parse manually to avoid this.
@@ -763,6 +794,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
           return lp;
         };
         const explicitPeriod = inferLatestExplicitPeriodFromUser(history, params);
+        const explicitOrdinal = inferLatestExplicitSlotOrdinal(history, params);
         const wantedPeriod = explicitPeriod?.period || normPeriod(params.chosenPeriod);
 
         // Extract the specific time the patient explicitly requested (e.g. "14h45", "14:45", "9h30")
@@ -829,19 +861,28 @@ async function executeAction(action, params, patient, callerNumber, history = []
               return Math.abs(ah*60+am - wMin) - Math.abs(bh*60+bm - wMin);
             })[0];
           })()) ||
-          // 4. Match by normalized period alone
+          // 4. Match by explicit ordinal choice ("second one", "a segunda", "option 2")
+          (explicitOrdinal && (() => {
+            const idx = explicitOrdinal.index < 0
+              ? params._pendingSlots.length - 1
+              : explicitOrdinal.index;
+            return idx >= 0 && idx < params._pendingSlots.length
+              ? params._pendingSlots[idx]
+              : null;
+          })()) ||
+          // 5. Match by normalized period alone
           (wantedPeriod && params._pendingSlots.find(s => normPeriod(s.period) === wantedPeriod)) ||
-          // 5. Match by partial slotBase64 prefix (AI may truncate)
+          // 6. Match by partial slotBase64 prefix (AI may truncate)
           (params.slotBase64 && params._pendingSlots.find(s => s.slotBase64?.startsWith(params.slotBase64?.slice(0, 20)))) ||
-          // 6. Match by medicName
+          // 7. Match by medicName
           (params.medicName && params._pendingSlots.find(s => s.medicName?.toLowerCase().includes(params.medicName?.toLowerCase()))) ||
-          // 7. Last resort: first slot
-          (!explicitPeriod && params._pendingSlots[0]);
+          // 8. Last resort: first slot only when caller gave no explicit slot signal.
+          (!explicitPeriod && !explicitOrdinal && !wantedTime && params._pendingSlots[0]);
 
 
         if (chosenSlot) resolvedBase64 = chosenSlot.slotBase64;
-        if (explicitPeriod && !chosenSlot) {
-          console.warn(`[Booking] Explicit period "${explicitPeriod.period}" from ${explicitPeriod.source} did not match offered slots. Refusing unsafe fallback.`);
+        if ((explicitPeriod || explicitOrdinal || wantedTime) && !chosenSlot) {
+          console.warn(`[Booking] Explicit slot choice did not match offered slots. period=${explicitPeriod?.period || '(none)'} ordinal=${explicitOrdinal ? explicitOrdinal.index : '(none)'} time=${wantedTime || '(none)'}. Refusing unsafe fallback.`);
           return { error: 'Requested period did not match offered slots' };
         }
 
@@ -849,6 +890,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
         console.log(`[Booking] Slot resolution:`);
         console.log(`  chosenPeriod (AI)  : ${params.chosenPeriod || '(none)'}`);
         console.log(`  explicitPeriod     : ${explicitPeriod ? `${explicitPeriod.period} from ${explicitPeriod.source}` : '(none)'}`);
+        console.log(`  explicitOrdinal    : ${explicitOrdinal ? `${explicitOrdinal.index} from ${explicitOrdinal.source}` : '(none)'}`);
         console.log(`  wantedPeriod (norm): ${wantedPeriod || '(none)'}`);
         console.log(`  wantedTime         : ${wantedTime || '(none)'}`);
         console.log(`  slots available    : ${params._pendingSlots.map(s => `${s.period} ${s.medicName} ${s.time} (${s.displayTime})`).join(' | ')}`);
