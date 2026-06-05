@@ -481,7 +481,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
       const onSpeakReady = (earlyText) => {
         if (!speakStarted && isSpeaking) {
-          if (suppressEarlySpeak(earlyText, currentAgent, pendingSlots) || suppressUnsafeEarlySpeak(earlyText)) {
+          if (suppressEarlySpeak(earlyText, currentAgent, pendingSlots) || suppressUnsafeEarlySpeak(earlyText) || /\btransfer|\btransfir|\bpass(?:ar|o|a)\b|\bequipa de\b|\bbooking team\b|\bconsultas\b.*\bteam\b/i.test(earlyText || '')) {
             console.log(`[TTS] Early speak suppressed before slots: "${earlyText}"`);
             return;
           }
@@ -631,7 +631,16 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // ── AUTO-SPEAK: after silent inter-agent transfer, fire new agent immediately ──
       // Without this the new agent waits silently for patient to speak again.
       if (result.autoSpeak && !callEnding) {
-        if (speakStarted) await bridgePromise;
+        if (speakStarted && currentAbort) {
+          currentAbort('silent-agent-transfer');
+          currentAbort = null;
+        }
+        if (speakStarted) {
+          await Promise.race([
+            bridgePromise,
+            new Promise(r => setTimeout(r, 300)),
+          ]);
+        }
         await new Promise(r => setTimeout(r, 150));
         console.log(`[Agent] autoSpeak: firing ${currentAgent} after transfer`);
         isSpeaking = true;

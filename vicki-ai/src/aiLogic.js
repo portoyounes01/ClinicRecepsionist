@@ -101,6 +101,49 @@ function buildTransferContext(fromAgent, userText, history, bookingReasonText, p
 // HUMAN DATE/TIME FORMATTER
 // "2026-06-03T14:45:00" → "next Tuesday at quarter to three in the afternoon"
 // ─────────────────────────────────────────────
+function spokenDoctorName(name = '') {
+  return String(name || '')
+    .replace(/\bDr\.?\s*ª\b/gi, 'Doutora')
+    .replace(/\bDr\.?\s*a\.?\b/gi, 'Doutora')
+    .replace(/\bDra\.?\b/gi, 'Doutora')
+    .replace(/\bDr\.?\b/gi, 'Doutor')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizePeriodValue(value = '') {
+  const text = normalizeForIntent(value);
+  if (!text) return null;
+  if (/\b(manha|morning|a\.?m\.?)\b/.test(text)) return 'manhã';
+  if (/\b(tarde|afternoon|evening|fim do dia|final do dia|noite|p\.?m\.?)\b/.test(text)) return 'tarde';
+  return null;
+}
+
+function inferLatestExplicitPeriodFromUser(history = [], params = {}) {
+  const sources = [];
+  if (params.chosenPeriod) sources.push({ text: params.chosenPeriod, source: 'params.chosenPeriod' });
+  if (params.chosenTime) sources.push({ text: params.chosenTime, source: 'params.chosenTime' });
+  for (const m of (history || []).filter(m => m.role === 'user').slice(-8)) {
+    sources.push({ text: m.content || '', source: 'user' });
+  }
+
+  let latest = null;
+  for (const item of sources) {
+    const text = normalizeForIntent(item.text);
+    if (!text) continue;
+    let period = normalizePeriodValue(text);
+    const timeMatches = [...text.matchAll(/\b(\d{1,2})(?:h|:)(\d{2})?\b/g)];
+    if (timeMatches.length) {
+      const last = timeMatches[timeMatches.length - 1];
+      const hh = parseInt(last[1], 10);
+      if (hh >= 13 || hh <= 7) period = 'tarde';
+      else if (hh >= 8 && hh < 13) period = 'manhã';
+    }
+    if (period) latest = { period, source: item.source, text: item.text };
+  }
+  return latest;
+}
+
 function humanSlot(isoString) {
   // IMPORTANT: Newsoft returns local Lisbon time (e.g. '2026-06-18T14:00:00') with NO timezone suffix.
   // Using new Date() would treat it as UTC and add +1h offset. Parse manually to avoid this.
@@ -567,7 +610,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
         const h   = humanSlot(iso);
         return {
           slotBase64:  s.appointmentSlotBase64RawData,
-          medicName:   s.medicShortName || s.medicName,
+          medicName:   spokenDoctorName(s.medicShortName || s.medicName),
           date:        iso?.split('T')[0],
           displayDate: h.dayName,   // pre-computed — AI MUST use verbatim
           time:        iso?.split('T')[1]?.slice(0, 5),
@@ -679,17 +722,21 @@ async function executeAction(action, params, patient, callerNumber, history = []
       const appointments = raw.map(a => {
         const iso = a.appointmentDateBegin || (a.appointmentDate + 'T' + (a.appointmentTime || '00:00'));
         const t   = humanSlot(iso);
+        const doctorName = spokenDoctorName(a.medicName || a.medicShortName);
         return {
           appointmentId: a.appointmentId,
           display: `${t.dayName} às ${t.timeStr} da ${t.period} com ${a.medicName || a.medicShortName}`,
-          doctor:      a.medicName || a.medicShortName,
-          medicName:   a.medicName || a.medicShortName,
+          doctor:      doctorName,
+          medicName:   doctorName,
           date:        iso?.split('T')[0],
           time:        iso?.split('T')[1]?.slice(0, 5),
           displayDate: t.dayName,
           displayTime: t.timeStr,
         };
       });
+      for (const appt of appointments) {
+        appt.display = spokenDoctorName(appt.display);
+      }
       return { appointments };
     }
 
@@ -707,13 +754,16 @@ async function executeAction(action, params, patient, callerNumber, history = []
       let chosenSlot = null;
       if (params._pendingSlots && params._pendingSlots.length > 0) {
         const normPeriod = (p) => {
+          const normalized = normalizePeriodValue(p);
+          if (normalized) return normalized;
           if (!p) return null;
           const lp = p.toLowerCase();
           if (lp === 'morning'  || lp === 'manhã' || lp === 'manha') return 'manhã';
           if (lp === 'afternoon'|| lp === 'tarde' || lp === 'evening' || lp === 'night' || lp === 'fim do dia') return 'tarde';
           return lp;
         };
-        const wantedPeriod = normPeriod(params.chosenPeriod);
+        const explicitPeriod = inferLatestExplicitPeriodFromUser(history, params);
+        const wantedPeriod = explicitPeriod?.period || normPeriod(params.chosenPeriod);
 
         // Extract the specific time the patient explicitly requested (e.g. "14h45", "14:45", "9h30")
         // ONLY read from patient (user) messages — NOT from Vicki's slot-listing message,
@@ -786,14 +836,19 @@ async function executeAction(action, params, patient, callerNumber, history = []
           // 6. Match by medicName
           (params.medicName && params._pendingSlots.find(s => s.medicName?.toLowerCase().includes(params.medicName?.toLowerCase()))) ||
           // 7. Last resort: first slot
-          params._pendingSlots[0];
+          (!explicitPeriod && params._pendingSlots[0]);
 
 
         if (chosenSlot) resolvedBase64 = chosenSlot.slotBase64;
+        if (explicitPeriod && !chosenSlot) {
+          console.warn(`[Booking] Explicit period "${explicitPeriod.period}" from ${explicitPeriod.source} did not match offered slots. Refusing unsafe fallback.`);
+          return { error: 'Requested period did not match offered slots' };
+        }
 
         // AUDIT LOG — every booking decision is traceable
         console.log(`[Booking] Slot resolution:`);
         console.log(`  chosenPeriod (AI)  : ${params.chosenPeriod || '(none)'}`);
+        console.log(`  explicitPeriod     : ${explicitPeriod ? `${explicitPeriod.period} from ${explicitPeriod.source}` : '(none)'}`);
         console.log(`  wantedPeriod (norm): ${wantedPeriod || '(none)'}`);
         console.log(`  wantedTime         : ${wantedTime || '(none)'}`);
         console.log(`  slots available    : ${params._pendingSlots.map(s => `${s.period} ${s.medicName} ${s.time} (${s.displayTime})`).join(' | ')}`);
@@ -915,6 +970,15 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
     };
   }
 
+  const existingAppointment = /\b(tenho (alguma |uma |a )?consulta|consulta (marcada|agendada)|saber se tenho|verificar se tenho|ja tenho consulta|have an appointment|do i have an appointment|my appointment|next appointment)\b/.test(text);
+  if (existingAppointment && currentAgent !== 'appointments') {
+    return {
+      speak: '',
+      action: 'transfer_to_appointments',
+      currentAgent: 'appointments',
+    };
+  }
+
   const human = /\b(real person|human|reception|receptionist|manager|complaint|billing|bill|overcharged|charged incorrectly|insurance|health plan|falar com alguem|pessoa real|rececao|gerente|reclamacao|faturacao|fatura|cobraram|seguro|subsistema|plano de saude)\b/.test(text);
   if (human && currentAgent !== 'human') {
     return {
@@ -969,7 +1033,7 @@ function deterministicRouterDecision(userText, languageState) {
   }
 
   const booking = /\b(book|schedule|appointment|consultation|see a doctor|see the dentist|come in|available this week|available next week|can .* see me|marcar|agendar|consulta|ver um medico|vir esta semana|tem disponibilidade|pode ver-me)\b/.test(text);
-  const existingAppointment = /\b(cancel|reschedule|postpone|change my appointment|move my appointment|push my appointment|have an appointment|my appointment tomorrow|what time .* appointment|forgot what time .* appointment|next appointment|do i have an appointment|confirm my appointment|cancelar|desmarcar|remarcar|mudar a consulta|a que horas e a minha consulta|tenho consulta)\b/.test(text);
+  const existingAppointment = /\b(cancel|reschedule|postpone|change my appointment|move my appointment|push my appointment|have an appointment|my appointment tomorrow|what time .* appointment|forgot what time .* appointment|next appointment|do i have an appointment|confirm my appointment|cancelar|desmarcar|remarcar|mudar a consulta|a que horas e a minha consulta|tenho consulta|tenho alguma consulta|tenho uma consulta|consulta marcada|consulta agendada|saber se tenho|verificar se tenho|ja tenho consulta)\b/.test(text);
   if (existingAppointment) {
     return {
       intent: 'appointments',
@@ -1333,6 +1397,7 @@ async function processTurn({
         console.log(`[Guard] DOCTOR MATCH — "${userText}" → ${best.doc.medicShortName} (id:${best.doc.medicId}) [matched: ${best.matchedParts.join(', ')}]`);
         action = 'check_slots';
         speak = `Claro, com ${best.doc.medicShortName} — um momento, já verifico a disponibilidade.`;
+        speak = `Claro, com ${spokenDoctorName(best.doc.medicShortName || best.doc.medicName)} - um momento, ja verifico a disponibilidade.`;
         params = {
           ...params,
           medicId: best.doc.medicId,
@@ -1390,7 +1455,8 @@ async function processTurn({
     if (isConfirmText || isConfirmSpeak || isNameResponse) {
       // Infer chosenPeriod from recent conversation (last 6 turns) so we book the RIGHT slot.
       // Patient said "tarde" / "14h" / "afternoon" → tarde. "manhã" / "10h" / "morning" → manhã.
-      let inferredPeriod = params.chosenPeriod || null;
+      const latestPeriod = inferLatestExplicitPeriodFromUser(history, params);
+      let inferredPeriod = latestPeriod?.period || params.chosenPeriod || null;
       if (!inferredPeriod) {
         const recentText = history.slice(-6)
           .filter(m => m.role === 'user')
@@ -1570,7 +1636,7 @@ async function processTurn({
     }
 
     return {
-      speak,
+      speak: '',
       action: 'none',
       history,
       currentAgent:     targetAgent,

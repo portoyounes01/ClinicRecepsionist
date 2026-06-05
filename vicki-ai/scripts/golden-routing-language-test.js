@@ -50,6 +50,8 @@ const cases = [
   { input: 'Queria marcar uma consulta', expectedAgent: 'booking', language: 'pt' },
   { input: 'Tenho muita dor de dentes', expectedAgent: 'emergency', language: 'pt' },
   { input: 'Quanto custa uma limpeza?', expectedAgent: 'info', language: 'pt' },
+  { input: 'Tenho alguma consulta marcada?', expectedAgent: 'appointments', language: 'pt' },
+  { input: 'Eu queria saber se ja tenho uma consulta agendada', expectedAgent: 'appointments', language: 'pt' },
 ];
 
 async function runCase(test) {
