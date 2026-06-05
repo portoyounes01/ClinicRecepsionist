@@ -188,6 +188,18 @@ app.delete('/admin/memory', (req, res) => {
   res.status(400).json({ error: 'Provide ?id=PATIENT_ID or ?all=1' });
 });
 
+// PATCH /admin/memory?key=ADMIN_KEY&id=PATIENT_ID — merge fields into a patient record
+app.patch('/admin/memory', (req, res) => {
+  if (req.query.key !== (process.env.ADMIN_KEY || 'vicki2025')) return res.status(403).json({ error: 'Forbidden' });
+  const id = String(req.query.id || '');
+  if (!id) return res.status(400).json({ error: 'Provide ?id=PATIENT_ID' });
+  const mem = loadMem();
+  if (!mem[id]) return res.status(404).json({ error: `Patient ${id} not found` });
+  Object.assign(mem[id], req.body);
+  saveMem(mem);
+  res.json({ updated: id, record: mem[id] });
+});
+
 
 
 // ─────────────────────────────────────────────
