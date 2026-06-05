@@ -532,8 +532,14 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         return;
       }
 
-      if (looksIncomplete(candidate)) {
-        console.log(`[STT] Phrase sounds unfinished — waiting ${ENDPOINT_GRACE_MS}ms: "${candidate}"`);
+      // Short phrases (≤3 words) get extra grace even if they look complete —
+      // "sim" / "ok" / "tarde" alone often precede more words ("sim, de tarde" etc).
+      const candidateWords = candidate.split(/\s+/).filter(Boolean).length;
+      const shortPhraseGrace = candidateWords <= 3 ? Math.round(ENDPOINT_GRACE_MS * 1.5) : 0;
+
+      if (looksIncomplete(candidate) || shortPhraseGrace > 0) {
+        const graceMs = looksIncomplete(candidate) ? ENDPOINT_GRACE_MS : shortPhraseGrace;
+        console.log(`[STT] Waiting ${graceMs}ms before firing (${looksIncomplete(candidate) ? 'incomplete phrase' : `short phrase ${candidateWords}w`}): "${candidate}"`);
         clearTimeout(endpointGraceTimer);
         endpointGraceTimer = setTimeout(() => {
           endpointGraceTimer = null;
@@ -543,7 +549,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           if (!finalText) return;
           console.log(`[STT] Grace elapsed → AI Processing: "${finalText}"`);
           runTurn(finalText);
-        }, ENDPOINT_GRACE_MS);
+        }, graceMs);
         return;
       }
 
