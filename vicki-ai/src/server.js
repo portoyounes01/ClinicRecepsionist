@@ -180,6 +180,18 @@ app.post('/telnyx/keep-alive', (req, res) => {
 
 
 // ─────────────────────────────────────────────
+// INSTANT HANGUP — called by callHandler as soon
+// as Vicki finishes her goodbye. Returns <Hangup/>
+// immediately without waiting for keep-alive cycle.
+// ─────────────────────────────────────────────
+app.post('/telnyx/hangup-now', (req, res) => {
+  const callSid = req.body.CallSid || req.body.call_control_id || req.body.callSid || 'unknown';
+  console.log(`[Telnyx] Instant hangup | SID: ${callSid}`);
+  hangupCalls.delete(callSid);
+  res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Hangup/></Response>`);
+});
+
+// ─────────────────────────────────────────────
 // SILENCE WAV — Served as audio filler if needed
 // ─────────────────────────────────────────────
 app.get('/silence.wav', (req, res) => {

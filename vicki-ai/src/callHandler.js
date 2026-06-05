@@ -867,25 +867,49 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           })
           .catch(e => console.error('[Memory] Save error:', e.message));
 
-        // Wait for Vicki to finish speaking, then close.
-        // Polls every 200ms — max 6s wait — then hangs up.
+        // Wait for Vicki to finish her goodbye, then hang up immediately.
+        // Polls every 200ms until TTS mark fires (isSpeaking → false), max 8s.
+        // Then calls /telnyx/hangup-now directly — no keep-alive wait.
+        const http = require('http');
         let waited = 0;
         const doHangup = () => {
-          if (isSpeaking && waited < 6000) {
+          if (isSpeaking && waited < 8000) {
             waited += 200;
             setTimeout(doHangup, 200);
             return;
           }
-          // Small buffer so last TTS audio finishes playing on the patient's end
+          // Small buffer so the last audio byte reaches the patient's speaker
           setTimeout(() => {
+            console.log(`[Call] Goodbye finished — triggering instant hangup`);
+            // Fire /telnyx/hangup-now so Telnyx ends the call immediately
             if (callSid) {
-              hangupCalls.add(callSid);
-              console.log(`[Call] Added ${callSid} to hangupCalls — will end on next keep-alive`);
-            } else {
-              console.warn('[Call] callSid is null — cannot signal Telnyx hangup via keep-alive');
+              const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
+                ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+                : `http://localhost:${process.env.PORT || 3000}`;
+              const body = `CallSid=${encodeURIComponent(callSid)}`;
+              try {
+                const url = new URL(`${baseUrl}/telnyx/hangup-now`);
+                const reqOpts = {
+                  hostname: url.hostname,
+                  port:     url.port || (url.protocol === 'https:' ? 443 : 80),
+                  path:     url.pathname,
+                  method:   'POST',
+                  headers:  { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+                };
+                const mod = url.protocol === 'https:' ? require('https') : require('http');
+                const hreq = mod.request(reqOpts, hres => {
+                  console.log(`[Call] hangup-now response: ${hres.statusCode}`);
+                });
+                hreq.on('error', e => console.error('[Call] hangup-now request error:', e.message));
+                hreq.write(body);
+                hreq.end();
+              } catch (e) {
+                console.error('[Call] hangup-now URL error:', e.message);
+                hangupCalls.add(callSid); // fallback to keep-alive
+              }
             }
             try { ws.close(); } catch (_) {}
-          }, 600);
+          }, 400);
         };
         doHangup();
       }
