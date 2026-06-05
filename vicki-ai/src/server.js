@@ -239,6 +239,16 @@ server.listen(PORT, async () => {
   // Pre-load token + doctors + motives from cache
   await warmUp();
 
+  // Validate specialty map against the live doctor roster (anti-hallucination).
+  try {
+    const { getDoctors } = require('./newsoftCache');
+    const { validateSpecialties } = require('./data/specialties');
+    const doctors = await getDoctors();
+    validateSpecialties(doctors);
+  } catch (e) {
+    console.warn('[Specialties] validation skipped:', e.message);
+  }
+
   // Start Telegram manager bot
   startBot();
 

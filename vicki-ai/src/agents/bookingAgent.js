@@ -3,6 +3,7 @@
 // ============================================================
 
 const { behaviorContract, todayLine } = require('./sharedPrompt');
+const { buildSpecialtyPromptBlock } = require('../data/specialties');
 
 const LOULE_DOCTOR_IDS = [1, 3, 11, 13, 25, 33, 36, 39];
 
@@ -19,6 +20,10 @@ function buildPrompt(patient, clinicInfo, cachedDoctors, cachedMotives, memoryCo
     ? cachedDoctors.map(d => `- ${d.medicShortName || d.medicName} (medicId:${d.medicId})`).join('\n')
     : '- Lista de medicos indisponivel; se necessario usa primeiro disponivel.';
 
+  // Specialty -> doctors block, grounded to real bookable medicIds.
+  const specialtyBlock = buildSpecialtyPromptBlock(cachedDoctors, LOULE_DOCTOR_IDS, languageState === 'en' ? 'en' : 'pt')
+    || '- (sem mapa de especialidades; usa a lista geral de medicos)';
+
   return `${behaviorContract(languageState)}
 ${todayLine()}
 ${patientCtx}${memoryBlock}
@@ -26,12 +31,15 @@ ${patientCtx}${memoryBlock}
 MEDICOS DE LOULE:
 ${doctorList}
 
+ESPECIALIDADES E QUEM AS FAZ (usa SO estes medicos para cada tratamento):
+${specialtyBlock}
+
 TAREFA:
 Marcar consultas novas com rapidez e seguranca. Nunca inventes slots; usa check_slots e depois book_appointment.
 
 FLUXO OBRIGATORIO:
 1. Motivo: se ainda nao souberes o motivo, pergunta so isso.
-2. Medico: se o paciente nomeou medico, resolve pelo medicId; se nao, pergunta se tem preferencia ou se quer o primeiro disponivel.
+2. Medico: se o paciente nomeou medico, resolve pelo medicId; se nao, mas o tratamento tem especialidade, oferece SO os medicos listados para essa especialidade (pergunta se tem preferencia entre eles ou se quer o primeiro disponivel). Se nao houver especialidade clara, pergunta preferencia ou usa o primeiro disponivel.
 3. Disponibilidade: chama check_slots com motiveId, reasonText, dateFrom se o paciente pediu data, e medicId se houver preferencia.
 4. Slots: quando o sistema devolver slots, usa exatamente displayDate, displayTime, period, medicName e slotBase64.
 5. Escolha: se houver 2 opcoes e o paciente disser so "sim", pergunta qual prefere; se houver 1 opcao, "sim" confirma.
@@ -56,6 +64,14 @@ GUARDA-RAILS:
 - Nao digas "esta marcado" antes de book_appointment responder.
 - Nao reveles slotBase64, IDs internos ou dados tecnicos.
 - Mantem cada fala com 1 frase curta, ou 2 se for mesmo necessario.
+- ESPECIALIDADE: nunca ofereças um medico para um tratamento se ele nao estiver listado para essa especialidade acima. So existem os medicos da lista; nunca inventes nomes nem especialidades. Se o paciente pedir um medico que nao faz esse tratamento, diz com honestidade quem o faz e oferece esses.
+- Se nenhum medico da especialidade tiver vaga, nao inventes; diz que vais pedir a equipa para dar seguimento.
+
+EXEMPLO (especialidade):
+Paciente: "Preciso de um tratamento de canal."
+Vicki: "Claro. O nosso especialista em endodontia e o Dr. Hermes. Quer que veja a disponibilidade dele?"
+Paciente: "Sim."
+Vicki: [check_slots com motiveId e medicId do Dr. Hermes]
 
 DEVOLVE APENAS JSON VALIDO:
 {

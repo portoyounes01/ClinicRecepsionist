@@ -14,6 +14,8 @@ const newsoft = require('./newsoftApi');
 const { buildMemoryContext } = require('./patientMemory');
 const { sendBookingConfirmation, sendCancellationConfirmation } = require('./smsService');
 
+const { inferSpecialtyFromText, doctorsForSpecialty, getSpecialty } = require('./data/specialties');
+
 const routerAgent       = require('./agents/routerAgent');
 const bookingAgent      = require('./agents/bookingAgent');
 const appointmentsAgent = require('./agents/appointmentsAgent');
@@ -821,8 +823,35 @@ async function executeAction(action, params, patient, callerNumber, history = []
       const rawMotive = params.motiveId;
       const motiveId  = rawMotive && rawMotive !== 'undefined' && rawMotive !== 'null'
         ? rawMotive : null;
-      const medicId   = params.medicId && params.medicId !== 'undefined' && params.medicId !== 'null'
+      let medicId     = params.medicId && params.medicId !== 'undefined' && params.medicId !== 'null'
         ? params.medicId : null;
+
+      // ── SPECIALTY ENFORCEMENT (server-side, anti-hallucination) ────────────
+      // Resolve the requested specialty from the reason text deterministically.
+      // The LLM may pick a medicId; we VERIFY that doctor actually performs the
+      // specialty, and if no doctor was chosen we restrict the search pool to
+      // the specialty's doctors. This is the layer the LLM cannot bypass.
+      const specialtyId = inferSpecialtyFromText(params.reasonText || params._reasonText || '');
+      let specialtyDocs = [];
+      if (specialtyId) {
+        specialtyDocs = doctorsForSpecialty(specialtyId, LOULE_DOCTOR_IDS);
+        const numMedic = medicId != null ? parseInt(medicId, 10) : null;
+        if (numMedic != null && specialtyDocs.length && !specialtyDocs.includes(numMedic)) {
+          // LLM (or patient) picked a doctor who does NOT do this treatment.
+          // Drop the bad medicId so we search the right doctors instead of
+          // confidently offering a wrong one.
+          console.warn(`[Specialty] medicId ${numMedic} does NOT perform "${specialtyId}". Dropping it; valid: ${JSON.stringify(specialtyDocs)}`);
+          medicId = null;
+          params._specialtyMismatch = { specialtyId, validDocs: specialtyDocs };
+        }
+        // If exactly one doctor does this specialty and none was chosen, lock to them.
+        if (medicId == null && specialtyDocs.length === 1) {
+          medicId = specialtyDocs[0];
+          console.log(`[Specialty] "${specialtyId}" → single doctor; locking medicId ${medicId}`);
+        }
+        params._specialtyDocs = specialtyDocs;
+        params._specialtyId   = specialtyId;
+      }
 
       let dateFrom = today;
       let dateTo   = maxDate;
@@ -886,8 +915,20 @@ async function executeAction(action, params, patient, callerNumber, history = []
       }
       if (!raw.length) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: !!medicId, exact: !!(pref && pref.exact), urgent: isUrgent };
 
-      // Honor a stated period (manhã/tarde) when slots exist for it; otherwise show all.
+      // ── SPECIALTY POOL FILTER (anti-hallucination) ─────────────────────────
+      // When a specialty is known but no single doctor was locked, the API
+      // returned ALL Loulé doctors' slots. Restrict to the specialty's doctors
+      // so Vicki can never offer a doctor who doesn't perform the treatment.
       let pool = raw;
+      if (specialtyDocs.length && medicId == null) {
+        const allow = new Set(specialtyDocs);
+        const filtered = pool.filter(s => allow.has(s.medicId));
+        console.log(`[Specialty] "${specialtyId}" pool filter: ${pool.length} → ${filtered.length} (docs ${JSON.stringify(specialtyDocs)})`);
+        pool = filtered;
+        if (!pool.length) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: false, exact: !!(pref && pref.exact), urgent: isUrgent, specialtyId, noSpecialtySlots: true };
+      }
+
+      // Honor a stated period (manhã/tarde) when slots exist for it; otherwise show all.
       if (periodPref) {
         const filtered = raw.filter(s => {
           const h = parseInt(s.appointmentDateBegin?.split('T')[1] || '0', 10);
@@ -1708,15 +1749,40 @@ async function processTurn({
         // Confident single match
         const best = candidates[0];
         console.log(`[Guard] DOCTOR MATCH — "${userText}" → ${best.doc.medicShortName} (id:${best.doc.medicId}) [matched: ${best.matchedParts.join(', ')}]`);
-        action = 'check_slots';
-        speak = `Claro, com ${best.doc.medicShortName} — um momento, já verifico a disponibilidade.`;
-        speak = `Claro, com ${spokenDoctorName(best.doc.medicShortName || best.doc.medicName)} - um momento, ja verifico a disponibilidade.`;
-        params = {
-          ...params,
-          medicId: best.doc.medicId,
-          motiveId: params.motiveId || 'ACH',
-          reasonText: updatedBookingReasonText || params.reasonText,
-        };
+
+        // ── SPECIALTY CHECK: does this doctor actually do the requested treatment? ──
+        const reasonForSpec = updatedBookingReasonText || params.reasonText || '';
+        const specId = inferSpecialtyFromText(reasonForSpec);
+        const specDocs = specId ? doctorsForSpecialty(specId, LOULE_DOCTOR_IDS) : [];
+        const en = languageState === 'en';
+
+        if (specId && specDocs.length && !specDocs.includes(best.doc.medicId)) {
+          // Named doctor doesn't perform this treatment — be honest, offer the right ones.
+          const spec = getSpecialty(specId);
+          const specLabel = spec ? (en ? spec.en : spec.pt) : '';
+          const rightNames = specDocs
+            .map(id => cachedDoctors.find(d => d.medicId === id))
+            .filter(Boolean)
+            .map(d => spokenDoctorName(d.medicShortName || d.medicName));
+          const list = rightNames.length === 1
+            ? rightNames[0]
+            : rightNames.slice(0, -1).join(', ') + (en ? ' or ' : ' ou ') + rightNames.slice(-1);
+          console.warn(`[Specialty] Named doctor ${best.doc.medicId} does not do "${specId}". Offering: ${JSON.stringify(specDocs)}`);
+          action = 'none';
+          speak = en
+            ? `For ${specLabel.toLowerCase()}, that's handled by ${list}. Would you like me to check their availability?`
+            : `Para ${specLabel.toLowerCase()}, quem trata disso é ${list}. Quer que veja a disponibilidade?`;
+          params = { ...params, motiveId: params.motiveId, reasonText: reasonForSpec };
+        } else {
+          action = 'check_slots';
+          speak = `Claro, com ${spokenDoctorName(best.doc.medicShortName || best.doc.medicName)} - um momento, ja verifico a disponibilidade.`;
+          params = {
+            ...params,
+            medicId: best.doc.medicId,
+            motiveId: params.motiveId || 'ACH',
+            reasonText: updatedBookingReasonText || params.reasonText,
+          };
+        }
         parsed.action = action;
         parsed.speak = speak;
         parsed.params = params;
