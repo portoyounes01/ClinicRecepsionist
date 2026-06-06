@@ -489,6 +489,20 @@ function isAffirmationOnly(userText) {
     .test((userText || '').trim());
 }
 
+function isExplicitBookingConfirmation(text) {
+  const normalized = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!normalized) return false;
+
+  return /(?:^|[\s"'(])(?:i confirm to book this appointment|i confirm this appointment|confirm this appointment|confirm the appointment|confirm this booking|confirmo para marcar esta consulta|confirmo esta consulta|confirmo a marcacao|confirmo esta marcacao)(?:[.!?'" )]|$)/i
+    .test(normalized);
+}
+
 function lastAssistantSpeak(history) {
   for (let i = history.length - 1; i >= 0; i--) {
     const msg = history[i];
@@ -551,6 +565,19 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
       speak: "Pode dizer-me primeiro o motivo da consulta?",
       params,
     };
+  }
+
+  const explicitBookingConfirmation = isExplicitBookingConfirmation(userText) || isExplicitBookingConfirmation(speak);
+
+  if (action === 'book_appointment' && pendingSlots?.length) {
+    if (!explicitBookingConfirmation) {
+      console.warn('[Guard] book_appointment blocked â€” missing explicit confirmation phrase.');
+      return {
+        action: 'none',
+        speak: 'Antes de marcar, diga: "I confirm to book this appointment."',
+        params,
+      };
+    }
   }
 
   return { action, speak, params };
@@ -1971,6 +1998,23 @@ async function processTurn({
   // Catches ALL cases where AI confirmed booking but never called book_appointment:
   //   - action='none'   → AI spoke "Está tudo tratado!" without booking
   //   - action='hangup' → AI hung up after "Sim." without ever booking (this bug!)
+  if (
+    currentAgent === 'booking' &&
+    pendingSlots?.length > 0 &&
+    patient?.patientId &&
+    (action === 'none' || action === 'hangup' || action === 'book_appointment')
+  ) {
+    const explicitBookingConfirmation = isExplicitBookingConfirmation(userText) || isExplicitBookingConfirmation(speak);
+    if (!explicitBookingConfirmation) {
+      console.warn('[Guard] booking confirmation required ? blocking auto-book until explicit phrase is spoken.');
+      return {
+        action: 'none',
+        speak: 'Antes de marcar, diga: "I confirm to book this appointment."',
+        params,
+      };
+    }
+  }
+
   // If pendingSlots + known patient + patient confirmed → MUST book before anything else.
   if (
     currentAgent === 'booking' &&

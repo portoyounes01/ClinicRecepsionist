@@ -187,12 +187,27 @@ function playbackFallbackMs(bytesSent) {
   return Math.min(120000, Math.max(2500, estimatedMs + 3000));
 }
 
+function sanitizeSpeechText(text) {
+  return String(text || '')
+    .replace(/\b(Dr|Dra)\./gi, '$1')
+    .replace(/\b(Doutor|Doutora)\.(?=\s|$)/gi, '$1')
+    .replace(/\b([A-Za-zÀ-ÿ]+)-lo\/a\b/gi, '$1-lo ou $1-la')
+    .replace(/\b([A-Za-zÀ-ÿ]+)-la\/o\b/gi, '$1-la ou $1-lo')
+    .replace(/([A-Za-zÀ-ÿ])\/([A-Za-zÀ-ÿ])/g, '$1 ou $2')
+    .replace(/\s*[—–-]\s*/g, ', ')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+,/g, ',')
+    .replace(/,\s*,+/g, ',')
+    .trim();
+}
+
 // ─────────────────────────────────────────────
 // SPEAK — stream ElevenLabs audio to Telnyx
 // ─────────────────────────────────────────────
 async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
   if (!text?.trim() || telnyxWs.readyState !== 1) { if (onDone) onDone(); return; }
 
+  const spokenText = sanitizeSpeechText(text);
   const ttsStart = Date.now();
   let streamReadyAt = null;
   let firstMediaAt = null;
@@ -215,7 +230,7 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
     if (onDone) onDone();
   };
 
-  console.log(`[TTS] Vicki says: "${text}"`);
+  console.log(`[TTS] Vicki says: "${spokenText}"`);
   let aborted = false;
   if (getAbort) {
     getAbort((reason = 'abort') => {
@@ -231,11 +246,11 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
     // the TeXML bidirectional RTP stream in server.js.
     const isCartesia = (process.env.TTS_PROVIDER || 'elevenlabs').toLowerCase() === 'cartesia';
     const audioStream = isCartesia
-      ? cartesiaPcmStream(text)
+      ? cartesiaPcmStream(spokenText)
       : await elevenlabs.textToSpeech.stream(
           process.env.ELEVENLABS_VOICE_ID,
           {
-            text,
+            text: spokenText,
             model_id:                   'eleven_flash_v2_5',
             output_format:              'ulaw_8000',
             optimize_streaming_latency:  4,
