@@ -66,7 +66,7 @@ app.post('/telnyx/inbound', (req, res) => {
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Start>
-    <Stream url="${wsUrl}">
+    <Stream url="${wsUrl}" codec="PCMU" bidirectionalMode="rtp" bidirectionalCodec="PCMU" bidirectionalSamplingRate="8000">
       <Parameter name="callerNumber" value="${from}" />
     </Stream>
   </Start>

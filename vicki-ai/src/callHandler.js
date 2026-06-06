@@ -38,8 +38,7 @@ function accumulateOffered(offered, justShown) {
 }
 
 // ── Cartesia TTS (low-latency alternative to ElevenLabs) ─────────────────────
-// Streams Sonic via the SSE endpoint and yields raw PCM s16le 8kHz Buffers —
-// the same format ElevenLabs gives us, so the Telnyx send loop is unchanged.
+// Streams Sonic via the SSE endpoint and yields raw PCMU 8kHz Buffers.
 // Enabled by TTS_PROVIDER=cartesia. Needs CARTESIA_API_KEY + CARTESIA_VOICE_ID.
 // Docs: https://docs.cartesia.ai/api-reference/tts  (Cartesia-Version 2025-04-16)
 async function* cartesiaPcmStream(text) {
@@ -55,11 +54,7 @@ async function* cartesiaPcmStream(text) {
       transcript:    text,
       voice:         { mode: 'id', id: process.env.CARTESIA_VOICE_ID },
       language:      'pt',
-      // Telnyx's wire wants 16-bit linear PCM 8kHz — same as ElevenLabs' pcm_8000
-      // (confirmed: ElevenLabs pcm_8000 = S16LE 16-bit and it plays clean). The
-      // scratch came from Cartesia's SSE delivering audio in a burst (overrunning
-      // Telnyx playback), not from the format — fixed with real-time pacing below.
-      output_format: { container: 'raw', encoding: 'pcm_s16le', sample_rate: 8000 },
+      output_format: { container: 'raw', encoding: 'pcm_mulaw', sample_rate: 8000 },
     }),
   });
   if (!res.ok || !res.body) {
@@ -187,8 +182,8 @@ function clearTelnyxAudio(telnyxWs, reason = '') {
 }
 
 function playbackFallbackMs(bytesSent) {
-  // ElevenLabs pcm_8000 is 8kHz, 16-bit PCM: about 16KB per second of playback.
-  const estimatedMs = Math.ceil((bytesSent / 16000) * 1000);
+  // PCMU is 8-bit 8kHz: about 8KB per second of playback.
+  const estimatedMs = Math.ceil((bytesSent / 8000) * 1000);
   return Math.min(120000, Math.max(2500, estimatedMs + 3000));
 }
 
@@ -232,8 +227,8 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
   }
 
   try {
-    // TTS provider is swappable via TTS_PROVIDER. Both emit raw PCM s16le 8kHz,
-    // so the Telnyx send loop below is identical for either. Default: elevenlabs.
+    // TTS provider is swappable via TTS_PROVIDER. Both emit raw PCMU 8kHz, matching
+    // the TeXML bidirectional RTP stream in server.js.
     const isCartesia = (process.env.TTS_PROVIDER || 'elevenlabs').toLowerCase() === 'cartesia';
     const audioStream = isCartesia
       ? cartesiaPcmStream(text)
@@ -242,16 +237,16 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
           {
             text,
             model_id:                   'eleven_flash_v2_5',
-            output_format:              'pcm_8000',
+            output_format:              'ulaw_8000',
             optimize_streaming_latency:  4,
             voice_settings: { stability: 0.5, similarity_boost: 0.8 },
           }
         );
     streamReadyAt = Date.now();
 
-    // Buffer PCM chunks — sending each tiny chunk separately causes choppy audio.
-    // Accumulate into 1600-byte blocks (~200ms at 8kHz) before sending to Telnyx.
-    const CHUNK_SIZE = 1600;
+    // Buffer into 100ms PCMU frames. Telnyx accepts 20ms-30s RTP payload chunks,
+    // but pacing prevents bursty TTS streams from overrunning call playback.
+    const CHUNK_SIZE = 800;
     let buffer = Buffer.alloc(0);
 
     const flush = () => {
@@ -263,11 +258,7 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
       buffer = Buffer.alloc(0);
     };
 
-    // Cartesia's SSE delivers all audio in a burst; Telnyx playback can't absorb
-    // a whole utterance at once cleanly. Pace each 1600-byte frame (= 100ms of
-    // 16-bit 8kHz audio) at slightly-faster-than-real-time so the buffer stays
-    // fed without overrunning. ElevenLabs is paced by generation, so 0 for it.
-    const paceMs = isCartesia ? 85 : 0;
+    const paceMs = 95;
     const sleep  = (ms) => new Promise(r => setTimeout(r, ms));
     for await (const chunk of audioStream) {
       if (aborted || telnyxWs.readyState !== 1) break;
@@ -318,7 +309,7 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
 }
 
 // ─────────────────────────────────────────────
-// PCMA → Linear16 converter
+// G.711 → Linear16 converters
 // ─────────────────────────────────────────────
 function alawToLinear(b) {
   b ^= 0x55;
@@ -326,9 +317,26 @@ function alawToLinear(b) {
   let s = exp === 0 ? (mant << 4) + 8 : ((mant + 16) << (exp + 3)) - (16 << 4);
   return sign === 0 ? -s : s;
 }
+
+function mulawToLinear(b) {
+  b = ~b & 0xFF;
+  const sign = b & 0x80;
+  const exp = (b >> 4) & 0x07;
+  const mant = b & 0x0F;
+  let s = ((mant << 3) + 0x84) << exp;
+  s -= 0x84;
+  return sign ? -s : s;
+}
+
 function pcmaToLinear16(buf) {
   const out = Buffer.alloc(buf.length * 2);
   for (let i = 0; i < buf.length; i++) out.writeInt16LE(alawToLinear(buf[i]), i * 2);
+  return out;
+}
+
+function pcmuToLinear16(buf) {
+  const out = Buffer.alloc(buf.length * 2);
+  for (let i = 0; i < buf.length; i++) out.writeInt16LE(mulawToLinear(buf[i]), i * 2);
   return out;
 }
 
@@ -350,6 +358,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let sonioxOpen          = false;
   let processingTurn      = false;
   let sonioxWs            = null;
+  let telnyxMediaEncoding = 'PCMU';
   let pendingTranscript   = '';
   let lastInterimText     = '';   // latest Soniox interim — used to recover full sentence from rolling finals
 
@@ -1030,6 +1039,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           callerNumber = msg.start?.customParameters?.callerNumber
                       || msg.start?.from
                       || null;
+          telnyxMediaEncoding = String(msg.start?.media_format?.encoding || 'PCMU').toUpperCase();
+          console.log(`[Telnyx] Media format: ${telnyxMediaEncoding} ${msg.start?.media_format?.sample_rate || 8000}Hz`);
           console.log(`[Call] Started. Caller: ${callerNumber} | SID: ${callSid}`);
 
           // ── Look up patient name BEFORE speaking ─────────────────────────────────
@@ -1104,7 +1115,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
         case 'media':
           if (msg.media?.payload) {
-            const linear = pcmaToLinear16(Buffer.from(msg.media.payload, 'base64'));
+            const encoded = Buffer.from(msg.media.payload, 'base64');
+            const linear = telnyxMediaEncoding === 'PCMA'
+              ? pcmaToLinear16(encoded)
+              : pcmuToLinear16(encoded);
             // NOTE: audio-level barge-in removed — phone echo triggers false positives.
             // Turn-taking is handled in handleSonioxMessage via BARGE_IN_MODE (see top of file):
             // word-count + backchannel filtering, with protected messages finishing uninterrupted.
