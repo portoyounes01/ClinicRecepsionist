@@ -87,12 +87,16 @@ async function runConversation(scenario, opts = {}) {
   // 1) set the fixture for this call
   await postJson(baseUrl, '/gym/fixture', scenario.fixture || {});
 
-  // 2) connect as Telnyx
+  // 2) connect as Telnyx.
+  // Audio MUST stream at real time (speedFactor 1) — Soniox STT mistranscribes
+  // sped-up audio, which silently breaks every turn. Throughput comes from
+  // concurrency (the server pool), not from speeding up individual calls.
+  // simulatePlayback stays off (it only added dead-air, no STT benefit).
   const client = new TelnyxClient({
     url: wsUrl,
     callerNumber: scenario.callerNumber,
     speedFactor: opts.speedFactor || 1,
-    simulatePlayback: !live, // live: human hears locally, skip phone-playback sim
+    simulatePlayback: false,
   });
   const recorder = new Recorder();
   const timeline = new Timeline();

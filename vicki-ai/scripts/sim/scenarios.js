@@ -87,6 +87,9 @@ const SCENARIOS = [
   sc('booking', 'en', 'Booking a cleaning; mid-way ask the price, then continue.', { slug: 'msg_preco_meio', quirks: ['asks price mid-booking'], success: 'Never quotes a price; returns to booking and completes it.' }),
   sc('booking', 'pt', 'Marcas uma consulta e logo a seguir queres marcar uma segunda.', { slug: 'msg_segunda', success: 'Books the first, then handles the second without confusing them.' }),
 
+  // ── BOOKING — doctor rotation on rejection ────────────────
+  sc('booking', 'pt', 'Marcar uma limpeza; quando te oferecerem um horario, recusa esse medico/hora e pede outra opcao, depois aceita.', { slug: 'rotacao_medico', personality: 'exigente com a hora', quirks: ['recusa a primeira oferta e pede outra opcao'], success: 'On rejection Vicki offers an ALTERNATIVE (a different cleaning doctor by name or a clearly different slot) instead of repeating the same one, and ultimately books a valid cleaning doctor.' }),
+
   // ── BOOKING — no availability (2) ─────────────────────────
   sc('booking', 'pt', 'Queres marcar uma limpeza o quanto antes.', { slug: 'no_slots', fixture: { patient: null, slotMode: 'empty' }, success: 'Honestly states no availability; offers callback/alternative; NEVER fabricates a slot or books.' }),
   sc('booking', 'pt', 'Queres marcar com o Dr. Hermes (sem vaga), mas há com outros.', { slug: 'no_slots_dr', fixture: { patient: null, slotMode: 'plenty', doctorIds: [1, 3, 13, 33, 36] }, success: 'Honest that Hermes has no slot; offers another valid doctor for the treatment.' }),

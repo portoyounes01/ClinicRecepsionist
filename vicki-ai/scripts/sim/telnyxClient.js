@@ -48,7 +48,14 @@ class TelnyxClient extends EventEmitter {
   start() {
     return new Promise((resolve, reject) => {
       this.ws = new WebSocket(this.url);
+      // Connect watchdog: if the server is dead, 'open' may never fire and 'error'
+      // may never come — without this the whole batch hangs on one bad call.
+      const connectTimer = setTimeout(() => {
+        if (!this._opened) { this.closed = true; try { this.ws.close(); } catch (_) {} reject(new Error('connect timeout')); }
+      }, this.startDelayMs + 12000);
       this.ws.on('open', () => {
+        this._opened = true;
+        clearTimeout(connectTimer);
         this.t0 = Date.now();
         this.ws.send(JSON.stringify({ event: 'connected' }));
         // Delay 'start' so the server finishes per-call setup and registers its
@@ -70,8 +77,13 @@ class TelnyxClient extends EventEmitter {
         }, this.startDelayMs);
       });
       this.ws.on('message', (data) => this._onMessage(data));
-      this.ws.on('close', () => { this.closed = true; this._stopPump(); this.emit('close'); });
-      this.ws.on('error', (e) => { if (!this.closed) reject(e); });
+      this.ws.on('close', () => {
+        this.closed = true;
+        this._stopPump();
+        if (this._drainResolve) { const r = this._drainResolve; this._drainResolve = null; r(); } // unblock sendUtterance
+        this.emit('close');
+      });
+      this.ws.on('error', (e) => { clearTimeout(connectTimer); if (!this.closed) reject(e); });
     });
   }
 
@@ -110,7 +122,14 @@ class TelnyxClient extends EventEmitter {
       frame._pcm16 = pcm16.slice(i * 2, i * 2 + FRAME_BYTES * 2);
       this.frameQueue.push(frame);
     }
-    return new Promise((resolve) => { this._drainResolve = resolve; });
+    const frames = this.frameQueue.length;
+    const maxMs = Math.round((frames * FRAME_MS) / this.speedFactor) + 8000; // expected + buffer
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => { if (done) return; done = true; this._drainResolve = null; clearTimeout(t); resolve(); };
+      const t = setTimeout(finish, maxMs);
+      this._drainResolve = finish;
+    });
   }
 
   _onMessage(data) {

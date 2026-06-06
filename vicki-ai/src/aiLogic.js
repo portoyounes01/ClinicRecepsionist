@@ -875,6 +875,19 @@ async function executeAction(action, params, patient, callerNumber, history = []
       const pref       = params._datePref || null;
       const aiDateFrom = params.dateFrom || params.date || null;
 
+      // ── DOCTOR ROTATION on rejection ──────────────────────────────────────
+      // If the caller is doctor-agnostic (no medicId) and is rejecting the
+      // previous offer (a follow-up) without naming a new date, offer a
+      // DIFFERENT specialty doctor's earliest slot instead of pushing the same
+      // doctor's dates out. Single-doctor specialties lock medicId earlier, so
+      // lastOfferedDoc stays null there and rotation never triggers.
+      const lastOfferedDoc = (medicId == null
+        && Array.isArray(params._pendingSlots) && params._pendingSlots[0]
+        && params._pendingSlots[0].medicId != null)
+        ? params._pendingSlots[0].medicId : null;
+      const rotateDoctors = lastOfferedDoc != null
+        && !(pref && pref.dateFrom) && !aiDateFrom && searchDirection !== 'earlier';
+
       if (pref && pref.exact && pref.dateFrom) {
         dateFrom = pref.dateFrom;
         dateTo   = pref.dateFrom;
@@ -885,6 +898,9 @@ async function executeAction(action, params, patient, callerNumber, history = []
         dateTo = params._explicitDateTo
           || (params._lastOfferedDate ? addDaysIso(params._lastOfferedDate, -1) : maxDate);
         if (dateTo < dateFrom) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: !!medicId };
+      } else if (rotateDoctors) {
+        // keep the full window (today..maxDate) so another doctor's earliest
+        // slot can surface — even on the same/earlier day than the rejected one.
       } else if (params._lastOfferedDate) {
         dateFrom = addDaysIso(params._lastOfferedDate, 1);
       } else if (aiDateFrom) {
@@ -936,6 +952,18 @@ async function executeAction(action, params, patient, callerNumber, history = []
         if (!pool.length) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: false, exact: !!(pref && pref.exact), urgent: isUrgent, specialtyId, noSpecialtySlots: true };
       }
 
+      // Doctor rotation: drop the just-rejected doctor so a different specialty
+      // doctor surfaces. If no one else has slots in the window, keep the pool
+      // (the same doctor's offer stands; repeated identical offers are caught by
+      // the loop detector).
+      if (rotateDoctors) {
+        const others = pool.filter(s => s.medicId !== lastOfferedDoc);
+        if (others.length) {
+          console.log(`[Slots] rotation: excluding last-offered medicId ${lastOfferedDoc} → ${new Set(others.map(s => s.medicId)).size} other doctor(s)`);
+          pool = others;
+        }
+      }
+
       // Honor a stated period (manhã/tarde) when slots exist for it; otherwise show all.
       if (periodPref) {
         const filtered = raw.filter(s => {
@@ -952,6 +980,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
         const h   = humanSlot(iso);
         return {
           slotBase64:  s.appointmentSlotBase64RawData,
+          medicId:     s.medicId,   // kept so rotation can identify the offered doctor
           medicName:   spokenDoctorName(s.medicShortName || s.medicName),
           date:        iso?.split('T')[0],
           displayDate: h.dayName,   // pre-computed — AI MUST use verbatim
@@ -1993,7 +2022,7 @@ async function processTurn({
       if (sGuarded.action && sGuarded.action !== 'none' && sGuarded.action !== 'hangup') {
         try {
           const enrichedSParams = sGuarded.action === 'check_slots'
-            ? { ...sGuarded.params, _lastOfferedDate: lastOfferedDate, _slotSearchDirection: 'later', _datePref: resolveDatePreference(userText, new Date().toISOString().split('T')[0]), _bookingReasonText: sUpdatedReason }
+            ? { ...sGuarded.params, _lastOfferedDate: lastOfferedDate, _slotSearchDirection: 'later', _datePref: resolveDatePreference(userText, new Date().toISOString().split('T')[0]), _bookingReasonText: sUpdatedReason, _pendingSlots: pendingSlots }
             : sGuarded.action === 'book_appointment'
               ? { ...sGuarded.params, _pendingSlots: pendingSlots, _bookingReasonText: sUpdatedReason }
               : sGuarded.action === 'cancel_appointment'
@@ -2138,6 +2167,7 @@ async function processTurn({
                 _explicitDateTo: explicitBeforeDateTo(userText, lastOfferedDate),
                 _datePref: resolveDatePreference(userText, new Date().toISOString().split('T')[0]),
                 _bookingReasonText: updatedBookingReasonText,
+                _pendingSlots: pendingSlots,   // for doctor rotation on rejection
               }
             : params;
       const actionResult = await executeAction(action, enrichedParams, patient, callerNumber, history, nextLanguageState);

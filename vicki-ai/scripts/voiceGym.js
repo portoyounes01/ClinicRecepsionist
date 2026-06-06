@@ -50,7 +50,11 @@ async function main() {
   const work = [];
   for (const s of scenarios) for (let r = 0; r < REPEAT; r++) work.push({ scenario: s, run: r });
   if (LIVE_SAMPLE > work.length) LIVE_SAMPLE = work.length;
-  const liveSet = new Set(shuffleIdx(work.length).slice(0, LIVE_SAMPLE));
+  // Live samples prefer European Portuguese (the clinic's main language) so you
+  // hear pt-PT calls; fall back to any language if not enough pt items.
+  const order = shuffleIdx(work.length)
+    .sort((a, b) => (work[a].scenario.persona.language === 'pt' ? 0 : 1) - (work[b].scenario.persona.language === 'pt' ? 0 : 1));
+  const liveSet = new Set(order.slice(0, LIVE_SAMPLE));
   work.forEach((w, i) => { w.live = liveSet.has(i); });
 
   const poolSize = Math.min(CONCURRENCY, work.length);
