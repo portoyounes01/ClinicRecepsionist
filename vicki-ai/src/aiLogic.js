@@ -256,7 +256,12 @@ function slotDay(isoString) {
 }
 
 function addDaysIso(dateString, days) {
-  return new Date(new Date(dateString + 'T00:00:00').getTime() + days * 86400000)
+  // Parse as UTC (note the 'Z') so the arithmetic is timezone-independent.
+  // Parsing "...T00:00:00" without the Z uses LOCAL midnight, which on any
+  // host east of UTC (e.g. UTC+1) shifts the instant into the previous day —
+  // then toISOString() truncates back, so addDaysIso(d, 1) could return d.
+  // That silently broke "search a later day" (re-offered the rejected slot).
+  return new Date(new Date(dateString + 'T00:00:00Z').getTime() + days * 86400000)
     .toISOString()
     .split('T')[0];
 }
@@ -302,7 +307,10 @@ function explicitBeforeDateTo(userText, referenceDate) {
   const ref = new Date((referenceDate || new Date().toISOString().split('T')[0]) + 'T00:00:00');
   const target = new Date(ref.getFullYear(), ref.getMonth(), day);
   if (Number.isNaN(target.getTime())) return null;
-  return addDaysIso(target.toISOString().split('T')[0], -1);
+  // Format with LOCAL components — target.toISOString() would shift the calendar
+  // day by the UTC offset before handing it to addDaysIso.
+  const targetIso = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+  return addDaysIso(targetIso, -1);
 }
 
 // ── Resolve a caller's spoken date/time into a concrete search window ─────────
@@ -391,7 +399,7 @@ function resolveDatePreference(userText, todayIso) {
     const toSun = (7 - today.getDay()) % 7;
     return out(today, addDays(today, toSun || 6), false);
   }
-  if (/\b(o mais cedo|mais cedo possivel|primeira vaga|primeiro disponivel|primeira disponivel|assim que possivel|asap|earliest|first available|any day|qualquer dia|quando houver)\b/.test(text)) {
+  if (/\b(o mais cedo|mais cedo possivel|primeira vaga|primeiro disponivel|primeira disponivel|assim que possivel|asap|earliest|first available|quando houver)\b/.test(text)) {
     return out(today, addDays(today, 28), false);
   }
 
@@ -972,6 +980,24 @@ async function executeAction(action, params, patient, callerNumber, history = []
         if (others.length) {
           console.log(`[Slots] rotation: excluding last-offered medicId ${lastOfferedDoc} → ${new Set(others.map(s => s.medicId)).size} other doctor(s)`);
           pool = others;
+        }
+      }
+
+      // ── NEVER re-offer a just-rejected slot ────────────────────────────────
+      // The patient asked for another time, so the slots we already showed
+      // (in _pendingSlots) must not come back as "the earliest" — otherwise a
+      // fuzzy date phrase that resets the window to today would re-offer the very
+      // slot they declined. Match on the opaque slot token so it's exact. Keep
+      // the pool if exclusion empties it (better to repeat than to wrongly claim
+      // no availability).
+      if (Array.isArray(params._pendingSlots) && params._pendingSlots.length) {
+        const rejected = new Set(params._pendingSlots.map(s => s.slotBase64).filter(Boolean));
+        if (rejected.size) {
+          const fresh = pool.filter(s => !rejected.has(s.appointmentSlotBase64RawData));
+          if (fresh.length) {
+            if (fresh.length !== pool.length) console.log(`[Slots] excluding ${pool.length - fresh.length} just-offered slot(s) so they aren't re-offered`);
+            pool = fresh;
+          }
         }
       }
 
@@ -1900,9 +1926,22 @@ async function processTurn({
     const textLower  = (userText || '').toLowerCase();
     const isConfirmText  = /^(sim|ok|okay|claro|pode|por favor|confirmo|exato|certo|quero|vamos|vai|avança|marca|marque)\b/i.test(textLower);
     const isConfirmSpeak = /est[aá]\s*(tudo|marcad|feito|confirm|tratad|pronto)/i.test(speak || '');
-    const isNameResponse = /\b[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]{2,}(\s+[A-ZÁÉÍÓÚÂÊÎÔÛÃÕÀÇ][a-záéíóúâêîôûãõàç]{2,})+\b/.test(userText || '');
 
-    if (isConfirmText || isConfirmSpeak || isNameResponse) {
+    // ── SAFETY GATES — never auto-book unless the patient is actually confirming
+    // the offered slot. These prevent the worst possible bug: booking a real
+    // appointment (+ SMS) that the patient never agreed to.
+    //  1. They rejected it / asked for another time / asked a question
+    //     ("no", "another day", "are you sure?", "with Dr X?").
+    //  2. Vicki herself is asking for more info (a date/time/name) — in that case
+    //     a bare "ok" is answering her question, NOT confirming a booking.
+    // We also no longer treat "two capitalised words" as a confirmation — that
+    // matched doctor names (e.g. "Sylvia Suarez") and booked on a question.
+    const isRejectionOrQuestion = /\?/.test(userText || '')
+      || /\b(n[aã]o|nao|nope|not|don'?t|didn'?t|another|other|different|instead|outr[oa]|later|earlier|sooner|busy|ocupad|cancel|wait|are you sure|sure\?|change|mud[ae])\b/i.test(textLower);
+    const vickiAskingForInfo = /\?/.test(speak || '')
+      && /((what|which|que|qual|when|quando)[^?]{0,25}(day|dia|date|data|time|hora|name|nome))|need[^?]{0,15}(date|day|name)|preciso[^?]{0,15}(data|dia|nome)/i.test(speak || '');
+
+    if ((isConfirmText || isConfirmSpeak) && !isRejectionOrQuestion && !vickiAskingForInfo) {
       // Infer chosenPeriod from recent conversation (last 6 turns) so we book the RIGHT slot.
       // Patient said "tarde" / "14h" / "afternoon" → tarde. "manhã" / "10h" / "morning" → manhã.
       const latestPeriod = inferLatestExplicitPeriodFromUser(history, params);
