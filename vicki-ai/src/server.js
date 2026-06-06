@@ -78,6 +78,34 @@ function buildRingWav() {
 const RING_WAV = buildRingWav();
 
 // ─────────────────────────────────────────────
+// Half-ring WAV — just the 1s tone, no gap
+// Played once as ring 3 so Vicki "picks up" mid-ring
+// ─────────────────────────────────────────────
+function buildHalfRingWav() {
+  const sampleRate  = 8000;
+  const numSamples  = sampleRate * 1; // 1s tone only
+  const buf = Buffer.alloc(44 + numSamples);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + numSamples, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);
+  buf.writeUInt16LE(1, 22);
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate, 28);
+  buf.writeUInt16LE(1, 32);
+  buf.writeUInt16LE(8, 34);
+  buf.write('data', 36);
+  buf.writeUInt32LE(numSamples, 40);
+  for (let i = 0; i < numSamples; i++) {
+    buf[44 + i] = Math.round(0x80 + 60 * Math.sin(2 * Math.PI * 440 * i / sampleRate));
+  }
+  return buf;
+}
+const HALF_RING_WAV = buildHalfRingWav();
+
+// ─────────────────────────────────────────────
 // TELNYX WEBHOOK — Called when a call comes in
 // ─────────────────────────────────────────────
 app.post('/telnyx/inbound', (req, res) => {
@@ -95,10 +123,11 @@ app.post('/telnyx/inbound', (req, res) => {
 
   console.log(`[Telnyx] Streaming audio to: ${wsUrl}`);
 
-  // Play 2 ring cycles (6s total) then start the stream
+  // Ring 1+2 full (6s), ring 3 tone-only (1s) → stream starts mid-ring like a human pickup
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play loop="2">${baseUrl}/ring.wav</Play>
+  <Play loop="1">${baseUrl}/half-ring.wav</Play>
   <Start>
     <Stream url="${wsUrl}" codec="PCMU" bidirectionalMode="rtp" bidirectionalCodec="PCMU" bidirectionalSamplingRate="8000">
       <Parameter name="callerNumber" value="${from}" />
@@ -178,6 +207,15 @@ app.get('/silence.wav', (req, res) => {
 app.get('/ring.wav', (req, res) => {
   res.set('Content-Type', 'audio/wav');
   res.send(RING_WAV);
+});
+
+// ─────────────────────────────────────────────
+// HALF-RING WAV — 1s tone only, no gap
+// Plays as ring 3 so Vicki answers mid-ring
+// ─────────────────────────────────────────────
+app.get('/half-ring.wav', (req, res) => {
+  res.set('Content-Type', 'audio/wav');
+  res.send(HALF_RING_WAV);
 });
 
 // ─────────────────────────────────────────────
