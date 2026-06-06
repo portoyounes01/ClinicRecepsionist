@@ -7,7 +7,10 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "test:golden": "node scripts/golden-routing-language-test.js",
-    "test:stress": "node scripts/stress-test.js"
+    "test:stress": "node scripts/stress-test.js",
+    "test:textgym": "node scripts/textGym.js",
+    "test:voicegym": "node scripts/voiceGym.js",
+    "test:gym:gate": "node scripts/textGym.js --gate"
   },
   "dependencies": {
     "@elevenlabs/elevenlabs-js": "^2.49.1",

@@ -236,6 +236,39 @@ server.listen(PORT, async () => {
 ║  WebSocket: wss://YOUR-URL/media      ║
 ╚═══════════════════════════════════════╝
   `);
+  // ── VOICE GYM (dry-run) mode ──────────────────────────────────────────────
+  // No real Newsoft/SMS/Telegram. Fixtures are swapped per call by the gym
+  // harness via the control endpoints below (calls run sequentially).
+  if (process.env.VICKI_DRY_RUN) {
+    console.log('[Gym] VICKI_DRY_RUN active — Newsoft/SMS mocked, Telegram/nightly disabled');
+    const newsoft = require('./newsoftApi');
+    const { makeProvider } = require('../scripts/sim/newsoftFixtures');
+    const { validateSpecialties } = require('./data/specialties');
+
+    let _gymProvider = makeProvider({});
+    const PROVIDER_METHODS = ['getPatientByPhone', 'getPatientByIdentity', 'getDoctors',
+      'getMotives', 'getAvailableSlots', 'getPatientAppointments', 'createOrUpdatePatient',
+      'bookAppointment', 'cancelAppointment'];
+    const wrapper = {};
+    for (const m of PROVIDER_METHODS) wrapper[m] = (...a) => _gymProvider[m](...a);
+    newsoft.__setDryRunProvider(wrapper);
+
+    try { validateSpecialties(await wrapper.getDoctors()); } catch (e) { console.warn('[Specialties] skipped:', e.message); }
+
+    // Pre-warm the doctor cache used for Soniox context so the per-call setup
+    // is fast and the WS message handler registers before the gym's 'start'.
+    try { await require('./newsoftCache').getDoctors(); console.log('[Gym] Soniox doctor cache warmed'); }
+    catch (e) { console.warn('[Gym] cache warm skipped:', e.message); }
+
+    app.post('/gym/fixture', (req, res) => {
+      _gymProvider = makeProvider(req.body || {});
+      console.log(`[Gym] fixture set: slotMode=${req.body?.slotMode} patient=${req.body?.patient?.patientName || 'new'}`);
+      res.json({ ok: true });
+    });
+    app.get('/gym/sideEffects', (req, res) => res.json(_gymProvider.__sideEffects || {}));
+    return; // skip warmUp / Telegram / nightly entirely
+  }
+
   // Pre-load token + doctors + motives from cache
   await warmUp();
 

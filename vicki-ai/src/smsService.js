@@ -20,6 +20,10 @@ const CLINIC_PHONE             = '962 432 761';
  * Send an SMS via Telnyx alphanumeric sender ID.
  */
 async function sendSMS(to, text) {
+  if (process.env.VICKI_DRY_RUN) {
+    console.log(`[SMS] DRY_RUN — would send to ${to}: "${(text || '').slice(0, 60)}..."`);
+    return { dryRun: true };
+  }
   if (!TELNYX_API_KEY) {
     console.warn('[SMS] TELNYX_API_KEY not set — skipping SMS');
     return null;

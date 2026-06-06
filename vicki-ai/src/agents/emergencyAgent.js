@@ -2,14 +2,14 @@
 // EMERGENCY AGENT - urgent dental cases.
 // ============================================================
 
-const { behaviorContract, todayLine } = require('./sharedPrompt');
+const { behaviorContract, todayLine, nowDate } = require('./sharedPrompt');
 
 function buildPrompt(patient, clinicInfo, memoryContext, languageState = 'unknown') {
   const patientCtx = patient
     ? `PACIENTE: ${patient.patientName} (ID interno ${patient.patientId}; nunca digas o ID).`
     : 'PACIENTE NAO IDENTIFICADO: se for preciso marcar, recolhe apenas nome completo antes de book_appointment.';
 
-  const now = new Date();
+  const now = nowDate();
   const day = now.getDay();
   const hour = now.getHours() + now.getMinutes() / 60;
   const isOpen = day >= 1 && day <= 5 && hour >= 9 && hour < 19.5;
@@ -31,9 +31,10 @@ SE A CLINICA ESTA ABERTA:
 - Com confirmacao simples do paciente, chama book_appointment. Em urgencia, nao prolongues a confirmacao.
 
 SE A CLINICA ESTA FECHADA:
-- Diz que estamos fechados e que deve procurar urgencia hospitalar ou ligar 112 se houver dor intensa, inchaco grave, febre, traumatismo serio ou risco de vida.
-- Pede para ligar assim que abrirmos para encaixe rapido.
-- Se a situacao parecer critica, transfer_to_human se houver linha humana disponivel; caso contrario orienta para urgencia hospitalar/112.
+- Expressa empatia e diz que estamos fechados.
+- Se a dor for forte/inchaco/sangramento/dente partido/acidente (caso grave), faz SEMPRE transfer_to_human para a equipa de urgencia tratar do encaixe; nao deixes o paciente so com "ligue mais tarde".
+- Orienta tambem para urgencia hospitalar ou 112 se houver inchaco grave, febre, hemorragia, dificuldade em respirar/engolir, traumatismo serio ou risco de vida.
+- Para casos ligeiros, oferece marcar/encaixe assim que abrirmos.
 
 TRANSFERENCIAS:
 - Precos/custos -> transfer_to_info.

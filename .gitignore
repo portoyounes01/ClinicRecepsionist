@@ -2,3 +2,17 @@ node_modules/
 .env
 *.log
 stress_results.txt
+
+# Voice gym output (synthetic, but keep the repo clean)
+vicki-ai/data/gym_calls/
+vicki-ai/data/gym_transcripts/
+vicki-ai/data/gym_results_*.jsonl
+vicki-ai/data/gym_fixtures.json
+# Phase 2: sanitized real-call critiques
+vicki-ai/data/call_critiques.jsonl
+
+# PHI — never commit real patient data / call logs
+vicki-ai/data/call_log.jsonl
+vicki-ai/data/patient_memory.json
+vicki-ai/logs_dump.txt
+logs_dump.txt

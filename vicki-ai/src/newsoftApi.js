@@ -243,14 +243,36 @@ async function cancelAppointment({ appointmentId, reason }) {
   return res.data;
 }
 
+// ─────────────────────────────────────────────
+// DRY-RUN HOOK (offline simulation / voice gym)
+// When VICKI_DRY_RUN is set and a provider is registered, calls are
+// delegated to the provider instead of hitting the real Newsoft API —
+// so the training gym never creates/cancels real appointments.
+// Production path is byte-for-byte unchanged when the flag is off.
+// ─────────────────────────────────────────────
+let _dryProvider = null;
+function __setDryRunProvider(provider) { _dryProvider = provider; }
+const _dryOn = () => !!process.env.VICKI_DRY_RUN;
+
+function dryWrap(name, realFn) {
+  return async (...args) => {
+    if (_dryOn() && _dryProvider && typeof _dryProvider[name] === 'function') {
+      console.log(`[Newsoft] DRY_RUN ${name}`);
+      return _dryProvider[name](...args);
+    }
+    return realFn(...args);
+  };
+}
+
 module.exports = {
-  getPatientByPhone,
-  getPatientByIdentity,
-  createOrUpdatePatient,
-  getDoctors:             cache.getDoctors,   // re-export from cache
-  getMotives:             cache.getMotives,   // re-export from cache
-  getAvailableSlots,
-  getPatientAppointments,
-  bookAppointment,
-  cancelAppointment,
+  getPatientByPhone:      dryWrap('getPatientByPhone', getPatientByPhone),
+  getPatientByIdentity:   dryWrap('getPatientByIdentity', getPatientByIdentity),
+  createOrUpdatePatient:  dryWrap('createOrUpdatePatient', createOrUpdatePatient),
+  getDoctors:             dryWrap('getDoctors', cache.getDoctors),   // re-export from cache
+  getMotives:             dryWrap('getMotives', cache.getMotives),   // re-export from cache
+  getAvailableSlots:      dryWrap('getAvailableSlots', getAvailableSlots),
+  getPatientAppointments: dryWrap('getPatientAppointments', getPatientAppointments),
+  bookAppointment:        dryWrap('bookAppointment', bookAppointment),
+  cancelAppointment:      dryWrap('cancelAppointment', cancelAppointment),
+  __setDryRunProvider,
 };
