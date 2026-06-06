@@ -906,13 +906,16 @@ async function executeAction(action, params, patient, callerNumber, history = []
 
       console.log(`[Newsoft] slot search window: ${dateFrom}..${dateTo}${periodPref ? ` period=${periodPref}` : ''}${pref?.exact ? ' (exact day)' : ''}${isUrgent ? ' [URGENT]' : ''}`);
 
+      // Slot cache is bypassed under the dry-run gym so scenarios don't leak
+      // cached slots to one another (it's a per-process global). Production keeps
+      // the 60s cache for latency.
       const cacheKey = _slotCacheKey(medicId, motiveId, dateFrom, dateTo);
-      let raw = _slotCacheGet(cacheKey);
+      let raw = process.env.VICKI_DRY_RUN ? null : _slotCacheGet(cacheKey);
       if (raw) {
         console.log(`[Newsoft] slot cache HIT: ${cacheKey} (${raw.length} slots)`);
       } else {
         raw = await newsoft.getAvailableSlots({ medicId, motiveId, dateFrom, dateTo });
-        if (raw.length) _slotCacheSet(cacheKey, raw);
+        if (raw.length && !process.env.VICKI_DRY_RUN) _slotCacheSet(cacheKey, raw);
         console.log(`[Newsoft] slot cache MISS: fetched ${raw.length} slots`);
       }
       if (!raw.length) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: !!medicId, exact: !!(pref && pref.exact), urgent: isUrgent };
