@@ -899,8 +899,10 @@ async function executeAction(action, params, patient, callerNumber, history = []
           || (params._lastOfferedDate ? addDaysIso(params._lastOfferedDate, -1) : maxDate);
         if (dateTo < dateFrom) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: !!medicId };
       } else if (rotateDoctors) {
-        // keep the full window (today..maxDate) so another doctor's earliest
-        // slot can surface — even on the same/earlier day than the rejected one.
+        // Reset to today so we find the new doctor's true earliest slot, not
+        // just their availability in the leftover window from the rejected doctor.
+        dateFrom = today;
+        dateTo   = addDaysIso(today, 56);   // 2-month horizon for rotation
       } else if (params._lastOfferedDate) {
         dateFrom = addDaysIso(params._lastOfferedDate, 1);
       } else if (aiDateFrom) {
@@ -908,6 +910,15 @@ async function executeAction(action, params, patient, callerNumber, history = []
         // treat it as a window start, never a single locked day.
         dateFrom = aiDateFrom;
         dateTo   = addDaysIso(aiDateFrom, 28);
+      }
+
+      // Safety: repeated rejections can advance dateFrom past dateTo when the
+      // 28-day horizon is exhausted (e.g. last offer July 3 → dateFrom July 4,
+      // but maxDate is also July 4 → zero-day window → 0 slots every time).
+      // Extend by another 4 weeks so the patient never hits a dead end.
+      // Never applied to exact-date requests or urgent triage.
+      if (!pref?.exact && motiveId !== 'UR' && dateFrom >= dateTo) {
+        dateTo = addDaysIso(dateFrom, 28);
       }
 
       const periodPref = pref?.period || null;
