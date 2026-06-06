@@ -37,6 +37,50 @@ function accumulateOffered(offered, justShown) {
   return out.slice(-30); // cap memory
 }
 
+// ── Cartesia TTS (low-latency alternative to ElevenLabs) ─────────────────────
+// Streams Sonic via the SSE endpoint and yields raw PCM s16le 8kHz Buffers —
+// the same format ElevenLabs gives us, so the Telnyx send loop is unchanged.
+// Enabled by TTS_PROVIDER=cartesia. Needs CARTESIA_API_KEY + CARTESIA_VOICE_ID.
+// Docs: https://docs.cartesia.ai/api-reference/tts  (Cartesia-Version 2025-04-16)
+async function* cartesiaPcmStream(text) {
+  const res = await fetch('https://api.cartesia.ai/tts/sse', {
+    method: 'POST',
+    headers: {
+      'X-API-Key':        process.env.CARTESIA_API_KEY,
+      'Cartesia-Version': '2025-04-16',
+      'Content-Type':     'application/json',
+    },
+    body: JSON.stringify({
+      model_id:      process.env.CARTESIA_MODEL_ID || 'sonic-2',
+      transcript:    text,
+      voice:         { mode: 'id', id: process.env.CARTESIA_VOICE_ID },
+      language:      'pt',
+      output_format: { container: 'raw', encoding: 'pcm_s16le', sample_rate: 8000 },
+    }),
+  });
+  if (!res.ok || !res.body) {
+    let detail = ''; try { detail = await res.text(); } catch (_) {}
+    throw new Error(`Cartesia TTS ${res.status}: ${detail.slice(0, 200)}`);
+  }
+  // Parse the SSE stream: lines "data: {json}", each with base64 PCM in .data.
+  const decoder = new TextDecoder();
+  let sse = '';
+  for await (const part of res.body) {
+    sse += decoder.decode(part, { stream: true });
+    let nl;
+    while ((nl = sse.indexOf('\n')) !== -1) {
+      const line = sse.slice(0, nl).trim();
+      sse = sse.slice(nl + 1);
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      let msg; try { msg = JSON.parse(payload); } catch (_) { continue; }
+      if (msg.type === 'chunk' && msg.data) yield Buffer.from(msg.data, 'base64');
+      else if (msg.type === 'error') throw new Error(`Cartesia: ${msg.message || 'stream error'}`);
+    }
+  }
+}
+
 function lookupBridgeFor(userText, currentAgent, pendingSlots) {
   if (currentAgent !== 'booking' || !pendingSlots?.length) return null;
   const text = (userText || '').toLowerCase();
@@ -184,16 +228,20 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
   }
 
   try {
-    const audioStream = await elevenlabs.textToSpeech.stream(
-      process.env.ELEVENLABS_VOICE_ID,
-      {
-        text,
-        model_id:                   'eleven_flash_v2_5',
-        output_format:              'pcm_8000',
-        optimize_streaming_latency:  4,
-        voice_settings: { stability: 0.5, similarity_boost: 0.8 },
-      }
-    );
+    // TTS provider is swappable via TTS_PROVIDER. Both emit raw PCM s16le 8kHz,
+    // so the Telnyx send loop below is identical for either. Default: elevenlabs.
+    const audioStream = (process.env.TTS_PROVIDER || 'elevenlabs').toLowerCase() === 'cartesia'
+      ? cartesiaPcmStream(text)
+      : await elevenlabs.textToSpeech.stream(
+          process.env.ELEVENLABS_VOICE_ID,
+          {
+            text,
+            model_id:                   'eleven_flash_v2_5',
+            output_format:              'pcm_8000',
+            optimize_streaming_latency:  4,
+            voice_settings: { stability: 0.5, similarity_boost: 0.8 },
+          }
+        );
     streamReadyAt = Date.now();
 
     // Buffer PCM chunks — sending each tiny chunk separately causes choppy audio.
