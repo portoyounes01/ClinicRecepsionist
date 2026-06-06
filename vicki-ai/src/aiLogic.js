@@ -272,6 +272,20 @@ function inferSlotSearchDirection(userText) {
   return 'later';
 }
 
+// Did the patient name a specific doctor in this utterance? Used so an "another
+// day" re-search only spans the whole specialty when they're doctor-agnostic;
+// if they explicitly asked for Dr X, we keep searching Dr X.
+function patientNamedDoctor(userText, cachedDoctors) {
+  if (!userText || !Array.isArray(cachedDoctors)) return false;
+  const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const t = norm(userText);
+  if (/\b(dr[aª]?\.?|doutor[a]?)\b/.test(t)) return true;
+  return cachedDoctors.some(d => {
+    const first = norm(d.medicShortName || d.medicName).split(/\s+/).filter(p => p.length >= 4 && !/^dr/.test(p))[0];
+    return first && t.includes(first);
+  });
+}
+
 function explicitBeforeDateTo(userText, referenceDate) {
   const text = (userText || '').toLowerCase();
   if (!/\bbefore\b/.test(text)) return null;
@@ -864,6 +878,18 @@ async function executeAction(action, params, patient, callerNumber, history = []
         }
         params._specialtyDocs = specialtyDocs;
         params._specialtyId   = specialtyId;
+      }
+
+      // ── "ANOTHER DAY" SPANS THE WHOLE SPECIALTY ────────────────────────────
+      // On a re-search after the patient rejected an offer (_lastOfferedDate is
+      // set), if they did NOT name a doctor this turn and the specialty has more
+      // than one doctor, drop the locked doctor and search them all. Otherwise we
+      // march one (possibly sparse) doctor week by week into the far future while
+      // another specialty doctor is free much sooner — exactly what frustrated
+      // the caller (Carolina only had Fridays; Silvia/Nadine were free in days).
+      if (medicId != null && params._lastOfferedDate && specialtyDocs.length > 1 && !params._patientNamedDoctor) {
+        console.log(`[Specialty] another-day re-search: unlocking medicId ${medicId} to span specialty "${specialtyId}" ${JSON.stringify(specialtyDocs)}`);
+        medicId = null;
       }
 
       let dateFrom = today;
@@ -2233,6 +2259,7 @@ async function processTurn({
                 _datePref: resolveDatePreference(userText, new Date().toISOString().split('T')[0]),
                 _bookingReasonText: updatedBookingReasonText,
                 _pendingSlots: pendingSlots,   // for doctor rotation on rejection
+                _patientNamedDoctor: patientNamedDoctor(userText, cachedDoctors),
               }
             : params;
       const actionResult = await executeAction(action, enrichedParams, patient, callerNumber, history, nextLanguageState);
