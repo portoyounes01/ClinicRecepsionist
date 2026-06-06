@@ -820,7 +820,11 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
             const durationSeconds = Math.round((Date.now() - callStartTime) / 1000);
             generateCallSummary(conversationHistory, patient)
               .then(summary => {
-                if (patient?.patientId) updateAfterCall(patient.patientId, { patientName: patient.patientName, summary: summary.summary, intent: summary.intent, language: summary.language, explicitDoctorPreference: summary.explicitDoctorPreference, explicitTimePreference: summary.explicitTimePreference });
+                // Persist the language the caller ACTUALLY spoke this call (live
+                // detection) over the LLM summary's guess — the guess kept
+                // overwriting an established 'en' back to 'pt'.
+                const spokenLang = (languageState === 'en' || languageState === 'pt') ? languageState : summary.language;
+                if (patient?.patientId) updateAfterCall(patient.patientId, { patientName: patient.patientName, summary: summary.summary, intent: summary.intent, language: spokenLang, explicitDoctorPreference: summary.explicitDoctorPreference, explicitTimePreference: summary.explicitTimePreference });
                 logCallOutcome({ patientId: patient?.patientId, patientName: patient?.patientName, callerNumber, outcome: summary.outcome, intent: summary.intent, transferredToHuman: false, unclearTurns, durationSeconds, summary: summary.summary, flags: summary.flags || [] });
               }).catch(e => console.error('[Memory] Save error:', e.message));
             let waited2 = 0;
@@ -857,11 +861,13 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           .then(summary => {
             // 1. Update patient memory (only explicitly stated preferences)
             if (patient?.patientId) {
+              // Prefer the language actually spoken this call over the summary guess.
+              const spokenLang = (languageState === 'en' || languageState === 'pt') ? languageState : summary.language;
               updateAfterCall(patient.patientId, {
                 patientName:              patient.patientName,
                 summary:                  summary.summary,
                 intent:                   summary.intent,
-                language:                 summary.language,
+                language:                 spokenLang,
                 explicitDoctorPreference: summary.explicitDoctorPreference,
                 explicitTimePreference:   summary.explicitTimePreference,
               });
