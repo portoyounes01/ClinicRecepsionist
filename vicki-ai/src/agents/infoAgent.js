@@ -7,6 +7,15 @@ const { behaviorContract } = require('./sharedPrompt');
 function buildPrompt(patient, clinicInfo, memoryContext, languageState = 'unknown') {
   const firstName = patient?.patientName?.split(' ')[0] || null;
   const patientCtx = firstName ? `PACIENTE: ${firstName}.` : 'PACIENTE: desconhecido.';
+  const clinic = {
+    name:     clinicInfo?.name     || 'Instituto Vilas Boas',
+    location: clinicInfo?.location || 'Loule',
+    address:  clinicInfo?.address  || 'Avenida 25 de Abril, 8100-508 Loule, Algarve',
+    phone:    clinicInfo?.phone    || '+351 289 422 269',
+    mobile:   clinicInfo?.mobile   || '+351 962 432 761',
+    email:    clinicInfo?.email    || 'geral@institutovilasboas.pt',
+    hours:    clinicInfo?.hours    || 'Monday to Friday, 09:00 to 19:30. Closed weekends.',
+  };
   const memoryBlock = memoryContext
     ? `\nHISTORICO PARA CALOR HUMANO:\n${memoryContext}\n`
     : '';
@@ -15,12 +24,13 @@ function buildPrompt(patient, clinicInfo, memoryContext, languageState = 'unknow
 ${patientCtx}${memoryBlock}
 
 CONHECIMENTO DA CLINICA:
-- Nome: Instituto Vilas Boas.
-- Local: Avenida 25 de Abril, 8100-508 Loule, Algarve.
-- Telefone fixo: +351 289 422 269.
-- Telemovel: +351 962 432 761.
-- Email: geral@institutovilasboas.pt.
-- Horario: segunda a sexta, 09:00-19:30. Encerrado ao fim de semana.
+- Nome: ${clinic.name}.
+- Localidade: ${clinic.location}.
+- Morada: ${clinic.address}.
+- Telefone fixo: ${clinic.phone}.
+- Telemovel: ${clinic.mobile}.
+- Email: ${clinic.email}.
+- Horario: ${clinic.hours}.
 - Website: institutovilasboas.pt.
 - A equipa fala portugues e pode ajudar pacientes em ingles.
 - Servicos dentarios: implantes, ortodontia, alinhadores invisiveis, facetas, branqueamento, periodontologia, endodontia, cirurgia oral, odontopediatria, higiene oral, obturacoes/restauracoes.

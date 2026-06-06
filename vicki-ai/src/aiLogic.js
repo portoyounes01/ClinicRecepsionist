@@ -1487,6 +1487,71 @@ function speakIn(languageState, pt, en) {
   return languageState === 'en' ? en : pt;
 }
 
+function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
+  const text = normalizeForIntent(userText);
+  if (!text || userText === '[continua]') return null;
+
+  const info = {
+    name:     clinicInfo.name     || 'Instituto Vilas Boas',
+    location: clinicInfo.location || 'Loule',
+    address:  clinicInfo.address  || 'Avenida 25 de Abril, 8100-508 Loule, Algarve',
+    phone:    clinicInfo.phone    || '+351 289 422 269',
+    mobile:   clinicInfo.mobile   || '+351 962 432 761',
+    email:    clinicInfo.email    || 'geral@institutovilasboas.pt',
+    hours:    clinicInfo.hours    || 'Monday to Friday, 09:00 to 19:30. Closed weekends.',
+  };
+  const hoursText = languageState === 'en'
+    ? 'Monday to Friday, from nine a.m. to seven thirty p.m. We are closed on weekends'
+    : 'segunda a sexta, das nove da manha as sete e meia da tarde. Encerramos ao fim de semana';
+
+  const asksHours = /\b(hours?|opening hours?|closing hours?|what time (?:do you|are you|does the clinic)|when (?:do you|are you|does the clinic)|are you open|are you closed|open today|closed today|open on weekends?|open saturday|open sunday|weekend|saturday|sunday|horario|horarios|a que horas|quando abre|quando fech|abre|abrem|aberto|aberta|fecha|fecham|fechado|fechada|sabado|domingo|fim de semana)\b/.test(text);
+  if (asksHours) {
+    return speakIn(
+      languageState,
+      `O horario da clinica e ${hoursText}.`,
+      `The clinic is open ${hoursText}.`
+    );
+  }
+
+  const asksAddress = /\b(address|location|located|where are you|where is the clinic|morada|localizacao|onde ficam|onde fica|local)\b/.test(text);
+  if (asksAddress) {
+    return speakIn(
+      languageState,
+      `Estamos em ${info.address}.`,
+      `We are at ${info.address}.`
+    );
+  }
+
+  const asksContact = /\b(phone|number|mobile|email|contact|telefone|telemovel|email|contacto|contato)\b/.test(text);
+  if (asksContact) {
+    return speakIn(
+      languageState,
+      `Pode contactar-nos pelo telefone ${info.phone}, pelo telemovel ${info.mobile}, ou por email em ${info.email}.`,
+      `You can contact us on ${info.phone}, mobile ${info.mobile}, or by email at ${info.email}.`
+    );
+  }
+
+  const asksServices = /\b(services|treatments|what do you do|implants|braces|aligners|whitening|facets|veneers|servicos|tratamentos|implantes|ortodontia|alinhadores|branqueamento|facetas)\b/.test(text);
+  if (asksServices) {
+    return speakIn(
+      languageState,
+      'Fazemos medicina dentaria, incluindo implantes, ortodontia, alinhadores invisiveis, facetas, branqueamento, endodontia, cirurgia oral, odontopediatria e higiene oral. Tambem temos estetica facial, osteopatia e podologia.',
+      'We provide dental care including implants, orthodontics, clear aligners, veneers, whitening, root canal treatment, oral surgery, pediatric dentistry, and hygiene appointments. We also offer facial aesthetics, osteopathy, and podiatry.'
+    );
+  }
+
+  const asksEnglish = /\b(do you speak english|can you speak english|speak english|falam ingles|fala ingles)\b/.test(text);
+  if (asksEnglish) {
+    return speakIn(
+      languageState,
+      'Sim, a nossa equipa fala portugues e pode ajudar pacientes em ingles.',
+      'Yes, our team speaks Portuguese and can help patients in English.'
+    );
+  }
+
+  return null;
+}
+
 function deterministicTransferOverride(currentAgent, userText, languageState, patient) {
   if (!userText || userText === '[continua]') return null;
   const text = normalizeForIntent(userText);
@@ -1718,6 +1783,20 @@ async function processTurn({
 
   const nextLanguageState = detectCallerLanguage(userText, languageState);
   const finalize = (result) => ({ ...result, languageState: nextLanguageState });
+
+  const directClinicInfo = clinicInfoAnswer(userText, nextLanguageState, clinicInfo);
+  if (directClinicInfo) {
+    const parsed = { speak: directClinicInfo, action: 'none', intent: 'info', params: {} };
+    history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+    return finalize({
+      speak: directClinicInfo,
+      action: 'none',
+      history,
+      currentAgent: 'info',
+      unclearTurns: 0,
+      bookingReasonText,
+    });
+  }
 
   const transferOverride = deterministicTransferOverride(currentAgent, userText, nextLanguageState, patient);
   if (transferOverride) {
