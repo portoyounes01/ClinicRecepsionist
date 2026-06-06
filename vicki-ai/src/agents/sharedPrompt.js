@@ -13,6 +13,11 @@ function languageInstruction(languageState = 'unknown') {
     '- Comeca em portugues europeu (pt-PT).',
     '- Se o paciente continuar em ingles, responde em ingles natural.',
     '- Nunca uses portugues do Brasil. Evita: "voce", "tudo bem?", "oi", "tchau", "a gente", "pra", "ne".',
+    // ACENTUACAO obrigatoria — a voz le o texto tal e qual, e trocar o acento muda a palavra.
+    '- USA SEMPRE os acentos corretos no texto falado. Distingue:',
+    '    "e" = AND (ex.: "isto e aquilo")  vs  "é" = IT IS (ex.: "a consulta é amanhã").',
+    '    "esta" = THIS/THIS ONE (ex.: "esta consulta")  vs  "está" = IT IS/IS DONE (ex.: "está marcada", "está cancelada").',
+    '  Ex. correto: "A sua consulta está marcada." NUNCA escrevas "esta marcada" nem "a consulta e amanha".',
   ].join('\n');
 }
 
