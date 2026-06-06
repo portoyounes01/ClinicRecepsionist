@@ -51,15 +51,15 @@ async function* cartesiaPcmStream(text) {
       'Content-Type':     'application/json',
     },
     body: JSON.stringify({
-      model_id:      process.env.CARTESIA_MODEL_ID || 'sonic-2',
+      model_id:      process.env.CARTESIA_MODEL_ID || 'sonic-3.5',
       transcript:    text,
       voice:         { mode: 'id', id: process.env.CARTESIA_VOICE_ID },
       language:      'pt',
-      // Telnyx outbound PLAYBACK is 8-bit μ-law (PCMU) — its documented default,
-      // and the codec ElevenLabs' pcm_8000 produces (which is why it plays clean).
-      // (The inbound fork is A-law, decoded by pcmaToLinear16 — asymmetric, by
-      // Telnyx default.) 16-bit linear → scratch; A-law → silence; μ-law matches.
-      output_format: { container: 'raw', encoding: 'pcm_mulaw', sample_rate: 8000 },
+      // Telnyx's wire wants 16-bit linear PCM 8kHz — same as ElevenLabs' pcm_8000
+      // (confirmed: ElevenLabs pcm_8000 = S16LE 16-bit and it plays clean). The
+      // scratch came from Cartesia's SSE delivering audio in a burst (overrunning
+      // Telnyx playback), not from the format — fixed with real-time pacing below.
+      output_format: { container: 'raw', encoding: 'pcm_s16le', sample_rate: 8000 },
     }),
   });
   if (!res.ok || !res.body) {
@@ -234,7 +234,8 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
   try {
     // TTS provider is swappable via TTS_PROVIDER. Both emit raw PCM s16le 8kHz,
     // so the Telnyx send loop below is identical for either. Default: elevenlabs.
-    const audioStream = (process.env.TTS_PROVIDER || 'elevenlabs').toLowerCase() === 'cartesia'
+    const isCartesia = (process.env.TTS_PROVIDER || 'elevenlabs').toLowerCase() === 'cartesia';
+    const audioStream = isCartesia
       ? cartesiaPcmStream(text)
       : await elevenlabs.textToSpeech.stream(
           process.env.ELEVENLABS_VOICE_ID,
@@ -262,6 +263,12 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
       buffer = Buffer.alloc(0);
     };
 
+    // Cartesia's SSE delivers all audio in a burst; Telnyx playback can't absorb
+    // a whole utterance at once cleanly. Pace each 1600-byte frame (= 100ms of
+    // 16-bit 8kHz audio) at slightly-faster-than-real-time so the buffer stays
+    // fed without overrunning. ElevenLabs is paced by generation, so 0 for it.
+    const paceMs = isCartesia ? 85 : 0;
+    const sleep  = (ms) => new Promise(r => setTimeout(r, ms));
     for await (const chunk of audioStream) {
       if (aborted || telnyxWs.readyState !== 1) break;
       const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -273,6 +280,7 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
           telnyxWs.send(JSON.stringify({ event: 'media', media: { payload: send.toString('base64') } }));
           if (!firstMediaAt) firstMediaAt = Date.now();
           bytesSent += send.length;
+          if (paceMs) await sleep(paceMs);
         }
       }
     }
