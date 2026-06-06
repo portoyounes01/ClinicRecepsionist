@@ -1498,13 +1498,13 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
     phone:    clinicInfo.phone    || '+351 289 422 269',
     mobile:   clinicInfo.mobile   || '+351 962 432 761',
     email:    clinicInfo.email    || 'geral@institutovilasboas.pt',
-    hours:    clinicInfo.hours    || 'Monday to Friday, 09:00 to 19:30. Closed weekends.',
+    hours:    clinicInfo.hours    || 'Monday to Friday, 09:00 to 19:30. Closed weekends and public holidays.',
   };
   const hoursText = languageState === 'en'
-    ? 'Monday to Friday, from nine a.m. to seven thirty p.m. We are closed on weekends'
-    : 'segunda a sexta, das nove da manha as sete e meia da tarde. Encerramos ao fim de semana';
+    ? 'Monday to Friday, from nine a.m. to seven thirty p.m. We are closed on weekends and public holidays'
+    : 'segunda a sexta, das nove da manha as sete e meia da tarde. Encerramos ao fim de semana e nos feriados';
 
-  const asksHours = /\b(hours?|opening hours?|closing hours?|what time (?:do you|are you|does the clinic)|when (?:do you|are you|does the clinic)|are you open|are you closed|open today|closed today|open on weekends?|open saturday|open sunday|weekend|saturday|sunday|horario|horarios|a que horas|quando abre|quando fech|abre|abrem|aberto|aberta|fecha|fecham|fechado|fechada|sabado|domingo|fim de semana)\b/.test(text);
+  const asksHours = /\b(hours?|opening hours?|closing hours?|what time (?:do you|are you|does the clinic)|when (?:do you|are you|does the clinic)|are you open|are you closed|open today|closed today|open on weekends?|open saturday|open sunday|open holidays?|public holidays?|holiday|holidays|weekend|saturday|sunday|horario|horarios|a que horas|quando abre|quando fech|abre|abrem|aberto|aberta|fecha|fecham|fechado|fechada|feriado|feriados|sabado|domingo|fim de semana)\b/.test(text);
   if (asksHours) {
     return speakIn(
       languageState,

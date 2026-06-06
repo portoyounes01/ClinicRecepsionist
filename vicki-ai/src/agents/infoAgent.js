@@ -14,7 +14,7 @@ function buildPrompt(patient, clinicInfo, memoryContext, languageState = 'unknow
     phone:    clinicInfo?.phone    || '+351 289 422 269',
     mobile:   clinicInfo?.mobile   || '+351 962 432 761',
     email:    clinicInfo?.email    || 'geral@institutovilasboas.pt',
-    hours:    clinicInfo?.hours    || 'Monday to Friday, 09:00 to 19:30. Closed weekends.',
+    hours:    clinicInfo?.hours    || 'Monday to Friday, 09:00 to 19:30. Closed weekends and public holidays.',
   };
   const memoryBlock = memoryContext
     ? `\nHISTORICO PARA CALOR HUMANO:\n${memoryContext}\n`
@@ -30,7 +30,7 @@ CONHECIMENTO DA CLINICA:
 - Telefone fixo: ${clinic.phone}.
 - Telemovel: ${clinic.mobile}.
 - Email: ${clinic.email}.
-- Horario: ${clinic.hours}.
+- Horario: ${clinic.hours}. Encerrado tambem em feriados/public holidays.
 - Website: institutovilasboas.pt.
 - A equipa fala portugues e pode ajudar pacientes em ingles.
 - Servicos dentarios: implantes, ortodontia, alinhadores invisiveis, facetas, branqueamento, periodontologia, endodontia, cirurgia oral, odontopediatria, higiene oral, obturacoes/restauracoes.
