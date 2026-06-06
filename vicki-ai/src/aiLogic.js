@@ -1670,20 +1670,26 @@ async function processTurn({
           if (depth === 0 && start !== -1) { blocks.push(jsonText.slice(start, i + 1)); start = -1; }
         }
       }
-      // Try each block from last to first — take the first that parses and has 'action'
-      let found = null;
-      for (let i = blocks.length - 1; i >= 0; i--) {
+      // Parse all blocks that have an 'action' field, in order.
+      const candidates = [];
+      for (let i = 0; i < blocks.length; i++) {
         try {
-          const candidate = JSON.parse(blocks[i]);
-          if (candidate.action !== undefined) { found = candidate; break; }
+          const c = JSON.parse(blocks[i]);
+          if (c.action !== undefined) candidates.push({ idx: i, c });
         } catch (_) {}
       }
-      if (found) {
-        parsed = found;
-        console.warn(`[AI] Double-JSON recovered — took block ${blocks.length} of ${blocks.length}`);
-      } else {
-        throw new Error('No valid JSON block with action found');
-      }
+      if (!candidates.length) throw new Error('No valid JSON block with action found');
+
+      // PREFER a block with a REAL action (not "none"/"hangup") — the LLM
+      // sometimes appends a second "I can't do that / action: none" refusal
+      // block AFTER the genuine action block. Taking the last block made Vicki
+      // SAY she'd check slots (streamed from block 1) but then run block 2's
+      // refusal — speaking one thing and doing another. Prefer the first
+      // actionable block; fall back to the first block overall.
+      const actionable = candidates.find(({ c }) => c.action && c.action !== 'none' && c.action !== 'hangup');
+      const chosen = actionable || candidates[0];
+      parsed = chosen.c;
+      console.warn(`[AI] Double-JSON recovered — took block ${chosen.idx + 1} of ${blocks.length} (action=${parsed.action})`);
     }
   } catch (err) {
     console.error(
