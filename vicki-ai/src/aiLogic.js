@@ -833,7 +833,10 @@ async function executeAction(action, params, patient, callerNumber, history = []
       // The LLM may pick a medicId; we VERIFY that doctor actually performs the
       // specialty, and if no doctor was chosen we restrict the search pool to
       // the specialty's doctors. This is the layer the LLM cannot bypass.
-      const specialtyId = inferSpecialtyFromText(params.reasonText || params._reasonText || '');
+      // Use the PERSISTED booking reason too — when the caller says "the fastest
+      // time" without repeating "cleaning", reasonText is empty but the specialty
+      // (e.g. cleaning) was established earlier, so the doctor filter must hold.
+      const specialtyId = inferSpecialtyFromText(params.reasonText || params._bookingReasonText || params._reasonText || '');
       let specialtyDocs = [];
       if (specialtyId) {
         specialtyDocs = doctorsForSpecialty(specialtyId, LOULE_DOCTOR_IDS);
