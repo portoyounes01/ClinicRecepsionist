@@ -69,7 +69,7 @@ function transferSpeak(patient, languageState = 'pt') {
   }
 
   const phrases = [
-    `Um momento${name} — vou ligá-lo/a com um membro da nossa equipa que terá todo o gosto em ajudar.`,
+    `Um momento${name} — vou passar a chamada a um membro da nossa equipa que terá todo o gosto em ajudar.`,
     `Claro${name} — só um instante enquanto o/a transfiro para um colega nosso que pode tratar disto.`,
     `Com certeza${name} — um momento enquanto o/a passo para alguém da nossa equipa que cuida disto agora mesmo.`,
   ];
@@ -708,7 +708,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
           return {
             speak: en
               ? "I'm so sorry you're in pain. I don't have an urgent opening in the next few days, so I'll connect you with our team right now to get you seen as soon as possible."
-              : "Lamento muito que esteja com dores. Não tenho vaga urgente nos próximos dias, por isso vou ligá-lo/a já com a nossa equipa para o/a atendermos o quanto antes.",
+              : "Lamento muito que esteja com dores. Não tenho vaga urgente nos próximos dias, por isso vou já passar a chamada à nossa equipa para o atendermos o quanto antes.",
             action: 'transfer_to_human',
           };
         }
@@ -838,7 +838,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         return {
           speak: en
             ? "I'm sorry, I couldn't complete the booking in our system. One moment — I'll connect you with a member of our team who can sort this out right away."
-            : "Peço desculpa, não foi possível concluir a marcação no nosso sistema. Um momento — vou ligá-lo/a com um membro da nossa equipa que resolve isto imediatamente.",
+            : "Peço desculpa, não foi possível concluir a marcação no nosso sistema. Um momento — vou passar a chamada a um membro da nossa equipa que resolve isto imediatamente.",
           action: 'transfer_to_human',
         };
       }
@@ -856,7 +856,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
             : `Perfect — you're all booked at Instituto Vilas Boas in Loulé!${smsLineEn} Is there anything else I can help with?`;
         } else {
           confirmSpeak = (bs && t)
-            ? `Perfeito — está tudo marcado no Instituto Vilas Boas em Loulé! Esperamo-lo/a ${t.dayName} às ${t.timeStr} com ${bs.medicName}.${smsLinePt} Posso ajudar em mais alguma coisa?`
+            ? `Perfeito — está tudo marcado no Instituto Vilas Boas em Loulé! Esperamos por si ${t.dayName} às ${t.timeStr} com ${bs.medicName}.${smsLinePt} Posso ajudar em mais alguma coisa?`
             : `Perfeito — está tudo marcado no Instituto Vilas Boas em Loulé!${smsLinePt} Posso ajudar em mais alguma coisa?`;
         }
         return { speak: confirmSpeak, action: 'none' };
@@ -888,7 +888,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         return {
           speak: en
             ? `I'm sorry, I couldn't cancel it in our system. One moment — I'll connect you with someone from our team who can handle this for you.`
-            : `Peço desculpa, não foi possível cancelar no nosso sistema. Um momento — vou ligá-lo/a com alguém da nossa equipa que trata disto para si.`,
+            : `Peço desculpa, não foi possível cancelar no nosso sistema. Um momento — vou passar a chamada a alguém da nossa equipa que trata disto para si.`,
           action: 'transfer_to_human',
         };
       }
@@ -1592,7 +1592,7 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
   const human = /\b(real person|human|reception|receptionist|manager|complaint|billing|bill|overcharged|charged incorrectly|insurance|health plan|falar com alguem|pessoa real|rececao|gerente|reclamacao|faturacao|fatura|cobraram|seguro|subsistema|plano de saude)\b/.test(text);
   if (human && currentAgent !== 'human') {
     return {
-      speak: speakIn(languageState, 'Claro, vou ligá-lo/a com a nossa equipa agora mesmo.', "Of course, I'll connect you with our team now."),
+      speak: speakIn(languageState, 'Claro, vou passar a chamada à nossa equipa agora mesmo.', "Of course, I'll connect you with our team now."),
       action: 'transfer_to_human',
       currentAgent: 'human',
     };

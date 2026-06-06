@@ -196,7 +196,10 @@ function sanitizeSpeechText(text) {
     .replace(/\b([A-Za-zÀ-ÿ]+)-lo\/a\b/gi, '$1-lo ou $1-la')
     .replace(/\b([A-Za-zÀ-ÿ]+)-la\/o\b/gi, '$1-la ou $1-lo')
     .replace(/([A-Za-zÀ-ÿ])\/([A-Za-zÀ-ÿ])/g, '$1 ou $2')
-    .replace(/\s*[—–-]\s*/g, ', ')
+    // Only convert DASHES used as punctuation (em/en dash, or a hyphen padded by
+    // spaces) into a comma pause. NEVER touch word-internal hyphens — those join
+    // real words like "quinta-feira" (Thursday) and clitics like "Esperamo-lo".
+    .replace(/\s*[—–]\s*|\s+-\s+/g, ', ')
     .replace(/\s+/g, ' ')
     .replace(/\s+,/g, ',')
     .replace(/,\s*,+/g, ',')
