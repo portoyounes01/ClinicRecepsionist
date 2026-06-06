@@ -205,6 +205,23 @@ function humanSlot(isoString, lang = 'pt') {
   const [year, month, day]   = datePart.split('-').map(Number);
   const [hh, mm]             = (timePart || '00:00').split(':').map(Number);
   const en = lang === 'en';
+  const numberWord = n => {
+    const words = [
+      'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven',
+      'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen',
+      'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen',
+      'twenty', 'twenty one', 'twenty two', 'twenty three', 'twenty four',
+      'twenty five', 'twenty six', 'twenty seven', 'twenty eight',
+      'twenty nine', 'thirty', 'thirty one', 'thirty two', 'thirty three',
+      'thirty four', 'thirty five', 'thirty six', 'thirty seven',
+      'thirty eight', 'thirty nine', 'forty', 'forty one', 'forty two',
+      'forty three', 'forty four', 'forty five', 'forty six', 'forty seven',
+      'forty eight', 'forty nine', 'fifty', 'fifty one', 'fifty two',
+      'fifty three', 'fifty four', 'fifty five', 'fifty six', 'fifty seven',
+      'fifty eight', 'fifty nine',
+    ];
+    return words[n] || String(n);
+  };
 
   // Build a local Date just for weekday/month name (day-of-week)
   const date     = new Date(year, month - 1, day);
@@ -234,8 +251,10 @@ function humanSlot(isoString, lang = 'pt') {
   let timeStr;
   if (en) {
     const h12  = (hh % 12) === 0 ? 12 : hh % 12;
-    const ampm = hh < 12 ? 'am' : 'pm';
-    timeStr = mm === 0 ? `${h12} ${ampm}` : `${h12}:${String(mm).padStart(2, '0')} ${ampm}`;
+    const ampm = hh < 12 ? 'a.m.' : 'p.m.';
+    timeStr = mm === 0
+      ? `${numberWord(h12)} ${ampm}`
+      : `${numberWord(h12)} ${numberWord(mm)} ${ampm}`;
   } else {
     timeStr = mm === 0
       ? `${String(hh).padStart(2, '0')}h`
@@ -759,7 +778,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         action: 'none',
         pendingSlots: slots,
         _slotsContext: slots.map((s, i) =>
-          `Slot ${i+1} (${s.period}): ${humanSlot(s.date+'T'+s.time).dayName} às ${humanSlot(s.date+'T'+s.time).timeStr} da ${s.period} com ${s.medicName}\nslotBase64=${s.slotBase64}`
+          `Slot ${i+1} (${s.period}): ${humanSlot(s.date+'T'+s.time, lang).dayName} às ${humanSlot(s.date+'T'+s.time, lang).timeStr} da ${s.period} com ${s.medicName}\nslotBase64=${s.slotBase64}`
         ).join('\n\n'),
       };
     }
@@ -1095,7 +1114,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
       // so Vicki always offers just 2 clear choices, never a long list
       const toSlot = s => {
         const iso = s.appointmentDateBegin;
-        const h   = humanSlot(iso);
+        const h   = humanSlot(iso, lang);
         return {
           slotBase64:  s.appointmentSlotBase64RawData,
           medicId:     s.medicId,   // kept so rotation can identify the offered doctor

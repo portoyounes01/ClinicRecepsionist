@@ -41,7 +41,8 @@ function accumulateOffered(offered, justShown) {
 // Streams Sonic via the SSE endpoint and yields raw PCMU 8kHz Buffers.
 // Enabled by TTS_PROVIDER=cartesia. Needs CARTESIA_API_KEY + CARTESIA_VOICE_ID.
 // Docs: https://docs.cartesia.ai/api-reference/tts  (Cartesia-Version 2025-04-16)
-async function* cartesiaPcmStream(text) {
+async function* cartesiaPcmStream(text, language = 'pt') {
+  const ttsLanguage = language === 'en' ? 'en' : 'pt';
   const res = await fetch('https://api.cartesia.ai/tts/sse', {
     method: 'POST',
     headers: {
@@ -53,7 +54,7 @@ async function* cartesiaPcmStream(text) {
       model_id:      process.env.CARTESIA_MODEL_ID || 'sonic-3.5',
       transcript:    text,
       voice:         { mode: 'id', id: process.env.CARTESIA_VOICE_ID },
-      language:      'pt',
+      language:      ttsLanguage,
       output_format: { container: 'raw', encoding: 'pcm_mulaw', sample_rate: 8000 },
     }),
   });
@@ -245,8 +246,9 @@ async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
     // TTS provider is swappable via TTS_PROVIDER. Both emit raw PCMU 8kHz, matching
     // the TeXML bidirectional RTP stream in server.js.
     const isCartesia = (process.env.TTS_PROVIDER || 'elevenlabs').toLowerCase() === 'cartesia';
+    const ttsLanguage = playbackControls.language === 'en' ? 'en' : 'pt';
     const audioStream = isCartesia
-      ? cartesiaPcmStream(spokenText)
+      ? cartesiaPcmStream(spokenText, ttsLanguage)
       : await elevenlabs.textToSpeech.stream(
           process.env.ELEVENLABS_VOICE_ID,
           {
@@ -429,7 +431,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   };
 
   const speakToCaller = (text, onDone) =>
-    speak(text, ws, onDone, (fn) => { currentAbort = fn; }, playbackControls);
+    speak(text, ws, onDone, (fn) => { currentAbort = fn; }, {
+      ...playbackControls,
+      language: languageState === 'en' ? 'en' : 'pt',
+    });
 
   // ── Watchdog 1: Max call duration (15 min) ────────────────────────────────
   // If a call is still open after 15 min something went wrong — auto-hangup.
