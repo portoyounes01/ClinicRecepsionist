@@ -936,7 +936,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
         // Reset to today so we find the new doctor's true earliest slot, not
         // just their availability in the leftover window from the rejected doctor.
         dateFrom = today;
-        dateTo   = addDaysIso(today, 56);   // 2-month horizon for rotation
+        dateTo   = maxDate;   // 28-day horizon — Newsoft rejects intervals > 30 days
       } else if (params._lastOfferedDate) {
         dateFrom = addDaysIso(params._lastOfferedDate, 1);
       } else if (aiDateFrom) {
@@ -952,6 +952,12 @@ async function executeAction(action, params, patient, callerNumber, history = []
       // Extend by another 4 weeks so the patient never hits a dead end.
       // Never applied to exact-date requests or urgent triage.
       if (!pref?.exact && motiveId !== 'UR' && dateFrom >= dateTo) {
+        dateTo = addDaysIso(dateFrom, 28);
+      }
+
+      // HARD CAP: Newsoft rejects any IntervalDates span over 30 days (HTTP 400).
+      // Whatever the branches produced, never send a window wider than 28 days.
+      if (addDaysIso(dateFrom, 28) < dateTo) {
         dateTo = addDaysIso(dateFrom, 28);
       }
 
