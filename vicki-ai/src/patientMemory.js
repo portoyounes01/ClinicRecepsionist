@@ -157,7 +157,7 @@ function buildMemoryContext(memory) {
 
   // Show explicitly stated preferences (patient said them — safe to mention)
   if (memory.explicitDoctorPreference) {
-    lines.push(`• Patient explicitly said they prefer ${memory.explicitDoctorPreference.name} — you may mention this warmly as a question: "Would you like to go with ${memory.explicitDoctorPreference.name} again?"`);
+    lines.push(`• Patient explicitly said they prefer ${memory.explicitDoctorPreference.name} — mention this warmly ("Would you like ${memory.explicitDoctorPreference.name} again?") ONLY IF that doctor performs the requested treatment per the specialties list. If they do NOT do it, do not offer them; offer the correct specialty doctors instead.`);
   }
   if (memory.explicitTimePreference) {
     lines.push(`• Patient explicitly said they prefer ${memory.explicitTimePreference} appointments — you may ask "Still prefer the ${memory.explicitTimePreference}?"`);
