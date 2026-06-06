@@ -205,6 +205,25 @@ function sanitizeSpeechText(text) {
 // ─────────────────────────────────────────────
 // SPEAK — stream ElevenLabs audio to Telnyx
 // ─────────────────────────────────────────────
+function isFinalFarewell(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return false;
+
+  const normalized = raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’']/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (/[?]\s*$/.test(raw) || /\b(anything else|help with anything else|how else can i help|mais alguma coisa|posso ajudar|ajudar em mais alguma coisa|precisa de mais alguma coisa)\b/.test(normalized)) {
+    return false;
+  }
+
+  return /\b(goodbye|bye|have a good day|have a nice day|take care|thank you for calling|thanks for calling|thank you|thanks|ate logo|ate ja|adeus|obrigado|obrigada|tenha um bom dia|tenha uma boa tarde|resto de bom dia|resto de boa tarde)\s*[.!]*$/.test(normalized);
+}
+
 async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {
   if (!text?.trim() || telnyxWs.readyState !== 1) { if (onDone) onDone(); return; }
 
@@ -435,6 +454,84 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       ...playbackControls,
       language: languageState === 'en' ? 'en' : 'pt',
     });
+
+  const finishCallAfterAudio = (reason = 'final-farewell') => {
+    if (callEnding) return true;
+    callEnding = true;
+    clearTimeout(maxDurationWatchdog);
+    clearInterval(silenceWatchdog);
+    console.log(`[Call] Ending after ${reason}`);
+
+    const durationSeconds = Math.round((Date.now() - callStartTime) / 1000);
+    generateCallSummary(conversationHistory, patient)
+      .then(summary => {
+        if (patient?.patientId) {
+          const spokenLang = (languageState === 'en' || languageState === 'pt') ? languageState : summary.language;
+          updateAfterCall(patient.patientId, {
+            patientName:              patient.patientName,
+            summary:                  summary.summary,
+            intent:                   summary.intent,
+            language:                 spokenLang,
+            explicitDoctorPreference: summary.explicitDoctorPreference,
+            explicitTimePreference:   summary.explicitTimePreference,
+          });
+        }
+        logCallOutcome({
+          patientId:          patient?.patientId  || null,
+          patientName:        patient?.patientName || 'Unknown',
+          callerNumber,
+          outcome:            summary.outcome,
+          intent:             summary.intent,
+          transferredToHuman: currentAgent === 'human',
+          unclearTurns,
+          durationSeconds,
+          summary:            summary.summary,
+          flags:              summary.flags || [],
+        });
+      })
+      .catch(e => console.error('[Memory] Save error:', e.message));
+
+    let waited = 0;
+    const doHangup = () => {
+      if (isSpeaking && waited < 8000) {
+        waited += 200;
+        setTimeout(doHangup, 200);
+        return;
+      }
+      setTimeout(() => {
+        console.log('[Call] Final audio finished — triggering instant hangup');
+        if (callSid) {
+          const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
+            ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+            : `http://localhost:${process.env.PORT || 3000}`;
+          const body = `CallSid=${encodeURIComponent(callSid)}`;
+          try {
+            const url = new URL(`${baseUrl}/telnyx/hangup-now`);
+            const reqOpts = {
+              hostname: url.hostname,
+              port:     url.port || (url.protocol === 'https:' ? 443 : 80),
+              path:     url.pathname,
+              method:   'POST',
+              headers:  { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
+            };
+            const mod = url.protocol === 'https:' ? require('https') : require('http');
+            const hreq = mod.request(reqOpts, hres => {
+              console.log(`[Call] hangup-now response: ${hres.statusCode}`);
+            });
+            hreq.on('error', e => console.error('[Call] hangup-now request error:', e.message));
+            hreq.write(body);
+            hreq.end();
+          } catch (e) {
+            console.error('[Call] hangup-now URL error:', e.message);
+            hangupCalls.add(callSid);
+          }
+        }
+        try { ws.close(); } catch (_) {}
+      }, 400);
+    };
+    doHangup();
+    return true;
+  };
 
   // ── Watchdog 1: Max call duration (15 min) ────────────────────────────────
   // If a call is still open after 15 min something went wrong — auto-hangup.
@@ -835,6 +932,11 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
       // ── AUTO-SPEAK: after silent inter-agent transfer, fire new agent immediately ──
       // Without this the new agent waits silently for patient to speak again.
+      if (!callEnding && result.action !== 'hangup' && result.speak && isFinalFarewell(result.speak)) {
+        finishCallAfterAudio('final farewell phrase');
+        return;
+      }
+
       if (result.autoSpeak && !callEnding) {
         if (speakStarted && currentAbort) {
           currentAbort('silent-agent-transfer');
@@ -894,6 +996,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
             isSpeaking = false; currentAbort = null;
           }
           // ── CRITICAL: if autoSpeak result itself wants transfer/hangup, execute it ──
+          if (!callEnding && autoResult.action !== 'hangup' && autoResult.speak && isFinalFarewell(autoResult.speak)) {
+            finishCallAfterAudio('auto final farewell phrase');
+            return;
+          }
           if (autoResult.action === 'transfer_to_human' && !callEnding) {
             callEnding = true;
             clearTimeout(maxDurationWatchdog);
