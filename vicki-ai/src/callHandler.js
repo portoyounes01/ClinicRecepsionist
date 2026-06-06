@@ -545,10 +545,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         return;
       }
 
-      // Short phrases (≤3 words) get extra grace even if they look complete —
-      // "sim" / "ok" / "tarde" alone often precede more words ("sim, de tarde" etc).
+      // Short phrases (≤3 words) get a little extra grace even if they look
+      // complete — "sim" / "ok" / "tarde" alone sometimes precede more words
+      // ("sim, de tarde"). Kept at 1.0× (not 1.5×) so common confirmations like
+      // "yes"/"okay" don't add ~500ms of dead air before Vicki responds.
       const candidateWords = candidate.split(/\s+/).filter(Boolean).length;
-      const shortPhraseGrace = candidateWords <= 3 ? Math.round(ENDPOINT_GRACE_MS * 1.5) : 0;
+      const shortPhraseGrace = candidateWords <= 3 ? ENDPOINT_GRACE_MS : 0;
 
       if (looksIncomplete(candidate) || shortPhraseGrace > 0) {
         const graceMs = looksIncomplete(candidate) ? ENDPOINT_GRACE_MS : shortPhraseGrace;
