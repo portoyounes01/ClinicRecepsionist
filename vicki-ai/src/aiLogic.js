@@ -223,6 +223,19 @@ function humanSlot(isoString, lang = 'pt') {
     return words[n] || String(n);
   };
 
+  // Portuguese (Portugal) cardinal speller for 0–59 — used to spell out times
+  // as words so the TTS speaks them slowly and clearly instead of running the
+  // digits together (e.g. "dezasseis e quinze" not a fast "16h15"). PT-PT forms.
+  const numberWordPt = n => {
+    const units = ['zero','um','dois','três','quatro','cinco','seis','sete','oito','nove',
+      'dez','onze','doze','treze','catorze','quinze','dezasseis','dezassete','dezoito','dezanove'];
+    const tens  = { 20:'vinte', 30:'trinta', 40:'quarenta', 50:'cinquenta' };
+    if (n < 20) return units[n];
+    const t = Math.floor(n / 10) * 10;
+    const u = n % 10;
+    return u === 0 ? tens[t] : `${tens[t]} e ${units[u]}`;
+  };
+
   // Build a local Date just for weekday/month name (day-of-week)
   const date     = new Date(year, month - 1, day);
   const now      = new Date();
@@ -256,9 +269,11 @@ function humanSlot(isoString, lang = 'pt') {
       ? `${numberWord(h12)} ${ampm}`
       : `${numberWord(h12)} ${numberWord(mm)} ${ampm}`;
   } else {
+    // Spell the time out in words with comma pauses so the TTS slows down and
+    // the caller hears each number clearly. "16h15" → "dezasseis e quinze".
     timeStr = mm === 0
-      ? `${String(hh).padStart(2, '0')}h`
-      : `${String(hh).padStart(2, '0')}h${String(mm).padStart(2, '0')}`;
+      ? `${numberWordPt(hh)} horas`
+      : `${numberWordPt(hh)} e ${numberWordPt(mm)}`;
   }
 
   return { dayName, timeStr, period };
@@ -855,7 +870,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         return {
           speak: en
             ? `Done, that appointment is cancelled. You still have ${n} appointment${n > 1 ? 's' : ''} booked. Would you also like to cancel the next one, ${next.display}?`
-            : `Pronto, essa consulta esta cancelada. Ainda tem ${n} consulta${n > 1 ? 's' : ''} marcada${n > 1 ? 's' : ''}. Quer cancelar tambem a proxima, ${next.display}?`,
+            : `Pronto, essa consulta está cancelada. Ainda tem ${n} consulta${n > 1 ? 's' : ''} marcada${n > 1 ? 's' : ''}. Quer cancelar também a próxima, ${next.display}?`,
           action: 'none',
           pendingAppointments: actionResult.remainingAppointments,
         };
@@ -864,7 +879,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         return {
           speak: en
             ? `Done, it's cancelled. I don't see any other appointments booked. Is there anything else I can help with?`
-            : `Pronto, esta cancelado. Nao vejo mais consultas marcadas. Posso ajudar em mais alguma coisa?`,
+            : `Pronto, está cancelado. Não vejo mais consultas marcadas. Posso ajudar em mais alguma coisa?`,
           action: 'none',
           pendingAppointments: [],
         };
@@ -1502,13 +1517,13 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
   };
   const hoursText = languageState === 'en'
     ? 'Monday to Friday, from nine a.m. to seven thirty p.m. We are closed on weekends and public holidays'
-    : 'segunda a sexta, das nove da manha as sete e meia da tarde. Encerramos ao fim de semana e nos feriados';
+    : 'segunda a sexta, das nove da manhã às sete e meia da tarde. Encerramos ao fim de semana e nos feriados';
 
   const asksHours = /\b(hours?|opening hours?|closing hours?|what time (?:do you|are you|does the clinic)|when (?:do you|are you|does the clinic)|are you open|are you closed|open today|closed today|open on weekends?|open saturday|open sunday|open holidays?|public holidays?|holiday|holidays|weekend|saturday|sunday|horario|horarios|a que horas|quando abre|quando fech|abre|abrem|aberto|aberta|fecha|fecham|fechado|fechada|feriado|feriados|sabado|domingo|fim de semana)\b/.test(text);
   if (asksHours) {
     return speakIn(
       languageState,
-      `O horario da clinica e ${hoursText}.`,
+      `O horário da clínica é ${hoursText}.`,
       `The clinic is open ${hoursText}.`
     );
   }
