@@ -55,10 +55,11 @@ async function* cartesiaPcmStream(text) {
       transcript:    text,
       voice:         { mode: 'id', id: process.env.CARTESIA_VOICE_ID },
       language:      'pt',
-      // Telnyx's media stream is 8-bit A-law (G.711) — same as ElevenLabs'
-      // pcm_8000 here. Sending 16-bit linear made Telnyx read each PCM byte-pair
-      // as two A-law samples → scratchy noise. pcm_alaw matches the wire codec.
-      output_format: { container: 'raw', encoding: 'pcm_alaw', sample_rate: 8000 },
+      // Telnyx outbound PLAYBACK is 8-bit μ-law (PCMU) — its documented default,
+      // and the codec ElevenLabs' pcm_8000 produces (which is why it plays clean).
+      // (The inbound fork is A-law, decoded by pcmaToLinear16 — asymmetric, by
+      // Telnyx default.) 16-bit linear → scratch; A-law → silence; μ-law matches.
+      output_format: { container: 'raw', encoding: 'pcm_mulaw', sample_rate: 8000 },
     }),
   });
   if (!res.ok || !res.body) {
