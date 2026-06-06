@@ -141,6 +141,7 @@ function isBackchannel(text) {
 // phrase LOOKS unfinished (ends on a connector/preposition/filler), we wait a brief
 // grace for them to continue; complete-sounding phrases still fire instantly (speed).
 const ENDPOINT_GRACE_MS = Math.max(0, parseInt(process.env.ENDPOINT_GRACE_MS || '700', 10));
+const INITIAL_RING_DELAY_MS = Math.max(0, parseInt(process.env.INITIAL_RING_DELAY_MS || '4000', 10));
 
 const _norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
 
@@ -1170,15 +1171,16 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           console.log(`[Call] Started. Caller: ${callerNumber} | SID: ${callSid}`);
 
           // ── Look up patient name BEFORE speaking ─────────────────────────────────
-          // Race: lookup vs 2-second ring delay.
+          // Race: lookup vs initial ring delay.
           // Caller hears natural ringing while we fetch their name.
-          // If lookup finishes first, we still wait the full 2s for natural feel.
+          // If lookup finishes first, we still wait the configured delay for natural feel.
           // Then Vicki greets by name in ONE message — no 'one moment please'.
           // ──────────────────────────────────────────────────────────────────
           (async () => {
+            const startupStartedAt = Date.now();
             try {
-              // Lookup patient + doctors in parallel, greet as soon as data is ready
-              // No artificial delay — answer immediately
+              // Lookup patient + doctors in parallel while the caller hears ringing.
+              const ringDelay = new Promise(r => setTimeout(r, INITIAL_RING_DELAY_MS));
               const forceUnknown = forceUnknownCaller(callerNumber);
               if (forceUnknown) {
                 console.log(`[Newsoft] Forced unknown caller override active for ${callerNumber}`);
@@ -1187,6 +1189,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
                 callerNumber && !forceUnknown ? newsoft.getPatientByPhone(callerNumber) : Promise.resolve(null),
                 newsoft.getDoctors(),
                 newsoft.getMotives(),
+                ringDelay,
               ]);
 
               patient = patientResult; cachedDoctors = doctors; cachedMotives = motives;
@@ -1230,6 +1233,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
             } catch (err) {
               console.error('[Startup] Error:', err.message);
+              const remainingDelay = Math.max(0, INITIAL_RING_DELAY_MS - (Date.now() - startupStartedAt));
+              if (remainingDelay) await new Promise(r => setTimeout(r, remainingDelay));
               isSpeaking = true;
               speakToCaller(
                 "Olá! Sou a Vicki, a assistente virtual do Instituto Vilas Boas em Loulé. Em que posso ajudar?",
