@@ -382,4 +382,14 @@ server.listen(PORT, async () => {
 
   // Schedule nightly improvement agent (runs at 2am)
   scheduleNightly();
+
+  // Boot the ADDITIVE patient-lifecycle engine (reminders / confirms /
+  // reviews / recare). Self-disables if DATABASE_URL is unset — the
+  // inbound voice flow above is completely unaffected either way.
+  try {
+    const { bootLifecycle } = require('./lifecycle/boot');
+    await bootLifecycle(app);
+  } catch (e) {
+    console.error('[Lifecycle] Boot failed (inbound flow unaffected):', e.message);
+  }
 });

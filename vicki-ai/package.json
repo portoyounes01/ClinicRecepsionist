@@ -10,7 +10,8 @@
     "test:stress": "node scripts/stress-test.js",
     "test:textgym": "node scripts/textGym.js",
     "test:voicegym": "node scripts/voiceGym.js",
-    "test:gym:gate": "node scripts/textGym.js --gate"
+    "test:gym:gate": "node scripts/textGym.js --gate",
+    "test:lifecycle": "node scripts/lifecycle-it.js"
   },
   "dependencies": {
     "@elevenlabs/elevenlabs-js": "^2.49.1",
@@ -20,9 +21,11 @@
     "express": "^4.19.2",
     "node-telegram-bot-api": "^0.67.0",
     "openai": "^4.52.7",
+    "pg": "^8.21.0",
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "nodemon": "^3.1.4"
+    "nodemon": "^3.1.4",
+    "pg-mem": "^3.0.14"
   }
 }

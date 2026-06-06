@@ -230,6 +230,32 @@ async function bookAppointment({ patientId, slotBase64, motiveName, observation 
 }
 
 // ─────────────────────────────────────────────
+// CONFIRM: Mark an appointment as confirmed by the patient.
+// ADDITIVE — used only by the lifecycle engine (WhatsApp/voice confirm).
+// Does not change any existing behavior above.
+//
+// TODO: verify the exact Newsoft endpoint + status code that marks an
+// appointment "confirmed" against live data before deploying. The
+// confirmed code is configurable via NEWSOFT_CONFIRMED_STATUS_CODE
+// (default 'C') so it can be corrected without a code change.
+// ─────────────────────────────────────────────
+async function confirmAppointment({ appointmentId, channel }) {
+  const token = await cache.getToken();
+  const statusCode = process.env.NEWSOFT_CONFIRMED_STATUS_CODE || 'C';
+  const res = await axios.post(
+    `${BASE_URL}/appointment/confirm`,
+    {
+      ...clinicParams(),
+      AppointmentId:          appointmentId,
+      appointmentStatusCode:  statusCode,
+      AppointmentObservation: `Confirmada pelo paciente via Vicki (${channel || 'whatsapp'})`,
+    },
+    { headers: authHeader(token) }
+  );
+  return res.data;
+}
+
+// ─────────────────────────────────────────────
 // CANCEL: Cancel an appointment
 // ─────────────────────────────────────────────
 async function cancelAppointment({ appointmentId, reason }) {
@@ -276,5 +302,6 @@ module.exports = {
   getPatientAppointments: dryWrap('getPatientAppointments', getPatientAppointments),
   bookAppointment:        dryWrap('bookAppointment', bookAppointment),
   cancelAppointment:      dryWrap('cancelAppointment', cancelAppointment),
+  confirmAppointment:     dryWrap('confirmAppointment', confirmAppointment),
   __setDryRunProvider,
 };
