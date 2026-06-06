@@ -45,6 +45,39 @@ function buildSilenceWav(seconds = 5) {
 const SILENCE_WAV = buildSilenceWav(5);
 
 // ─────────────────────────────────────────────
+// Ring tone WAV — 1s 440Hz tone + 2s silence (one ring cycle = 3s)
+// Served at /ring.wav and played twice before answering
+// ─────────────────────────────────────────────
+function buildRingWav() {
+  const sampleRate  = 8000;
+  const toneSamples = sampleRate * 1;   // 1s ring
+  const gapSamples  = sampleRate * 2;   // 2s silence
+  const numSamples  = toneSamples + gapSamples; // 3s total = 1 ring cycle
+  const buf = Buffer.alloc(44 + numSamples);
+  buf.write('RIFF', 0);
+  buf.writeUInt32LE(36 + numSamples, 4);
+  buf.write('WAVE', 8);
+  buf.write('fmt ', 12);
+  buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(1, 20);            // PCM
+  buf.writeUInt16LE(1, 22);            // Mono
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate, 28);
+  buf.writeUInt16LE(1, 32);
+  buf.writeUInt16LE(8, 34);            // 8-bit
+  buf.write('data', 36);
+  buf.writeUInt32LE(numSamples, 40);
+  // 440Hz sine wave for the tone portion (8-bit unsigned, centre 0x80)
+  for (let i = 0; i < toneSamples; i++) {
+    buf[44 + i] = Math.round(0x80 + 60 * Math.sin(2 * Math.PI * 440 * i / sampleRate));
+  }
+  // Silence for the gap portion
+  buf.fill(0x80, 44 + toneSamples, 44 + numSamples);
+  return buf;
+}
+const RING_WAV = buildRingWav();
+
+// ─────────────────────────────────────────────
 // TELNYX WEBHOOK — Called when a call comes in
 // ─────────────────────────────────────────────
 app.post('/telnyx/inbound', (req, res) => {
@@ -62,9 +95,10 @@ app.post('/telnyx/inbound', (req, res) => {
 
   console.log(`[Telnyx] Streaming audio to: ${wsUrl}`);
 
-  // Start the stream + keep-alive loop via redirect
+  // Play 2 ring cycles (6s total) then start the stream
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
+  <Play loop="2">${baseUrl}/ring.wav</Play>
   <Start>
     <Stream url="${wsUrl}" codec="PCMU" bidirectionalMode="rtp" bidirectionalCodec="PCMU" bidirectionalSamplingRate="8000">
       <Parameter name="callerNumber" value="${from}" />
@@ -135,6 +169,15 @@ app.post('/telnyx/hangup-now', (req, res) => {
 app.get('/silence.wav', (req, res) => {
   res.set('Content-Type', 'audio/wav');
   res.send(SILENCE_WAV);
+});
+
+// ─────────────────────────────────────────────
+// RING WAV — One ring cycle (1s tone + 2s gap)
+// Played loop="2" in <Play> before answering = 2 rings (6s)
+// ─────────────────────────────────────────────
+app.get('/ring.wav', (req, res) => {
+  res.set('Content-Type', 'audio/wav');
+  res.send(RING_WAV);
 });
 
 // ─────────────────────────────────────────────
