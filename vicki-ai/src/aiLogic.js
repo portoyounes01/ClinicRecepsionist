@@ -12,7 +12,7 @@
 const OpenAI = require('openai').default;
 const newsoft = require('./newsoftApi');
 const { buildMemoryContext } = require('./patientMemory');
-const { sendBookingConfirmation, sendCancellationConfirmation } = require('./smsService');
+const { sendBookingConfirmation, sendCancellationConfirmation, queueSMS } = require('./smsService');
 
 const { inferSpecialtyFromText, doctorsForSpecialty, getSpecialty } = require('./data/specialties');
 
@@ -1406,7 +1406,8 @@ async function executeAction(action, params, patient, callerNumber, history = []
       const smsPhone = callerNumber || patientForBooking?.patientPhoneNumber;
       const smsSent = !!(chosenSlot && patientForBooking && smsPhone);
       if (smsSent) {
-        sendBookingConfirmation({
+        // Queue — sent only after the call disconnects so it never garbles audio.
+        queueSMS(callerNumber, () => sendBookingConfirmation({
           patientName: patientForBooking.patientName,
           phoneNumber: smsPhone,
           displayDate: chosenSlot.displayDate,
@@ -1415,7 +1416,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
           date:        chosenSlot.date,
           time:        chosenSlot.time,
           reasonText:  params._bookingReasonText || params.motiveName || '',
-        }).catch(err => console.error('[SMS] Background send failed:', err.message));
+        }).catch(err => console.error('[SMS] Background send failed:', err.message)));
       }
 
       return {
@@ -1451,14 +1452,18 @@ async function executeAction(action, params, patient, callerNumber, history = []
       // Fire-and-forget SMS cancellation notification
       if (patient) {
         cancelledAppt = cancelledAppt || params._pendingAppts?.find(a => String(a.appointmentId) === String(resolvedId));
-        sendCancellationConfirmation({
+        // Queue — sent only after the call disconnects so it never garbles audio.
+        // Key by callerNumber so callHandler's flush-on-close (also keyed by
+        // callerNumber) picks it up; recipient is still the patient's number.
+        queueSMS(callerNumber, () => sendCancellationConfirmation({
           patientName: patient.patientName,
           phoneNumber: callerNumber || patient.patientPhoneNumber,
           displayDate: cancelledAppt?.displayDate,
           displayTime: cancelledAppt?.displayTime,
           medicName:   cancelledAppt?.medicName || cancelledAppt?.doctor,
           date:        cancelledAppt?.date,
-        }).catch(err => console.error('[SMS] Cancel SMS failed:', err.message));
+          time:        cancelledAppt?.time,
+        }).catch(err => console.error('[SMS] Cancel SMS failed:', err.message)));
       }
 
       const remainingAppointments = (params._pendingAppts || [])

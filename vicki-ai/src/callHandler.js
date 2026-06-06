@@ -8,6 +8,7 @@ const { processTurn, generateCallSummary } = require('./aiLogic');
 const cache         = require('./newsoftCache');
 const newsoft       = require('./newsoftApi');
 const { getPatientMemory, updateAfterCall, logCallOutcome } = require('./patientMemory');
+const { flushQueuedSMS } = require('./smsService');
 const telegram      = require('./telegramBot');
 
 
@@ -1294,6 +1295,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     clearInterval(silenceWatchdog);
     if (endpointGraceTimer) { clearTimeout(endpointGraceTimer); endpointGraceTimer = null; }
     try { if (sonioxWs) { sonioxWs.close(); sonioxWs = null; } } catch (_) {}
+    // Now that the call is fully disconnected, send any SMS we deferred so it
+    // never competed with the live audio stream.
+    flushQueuedSMS(callerNumber).catch(e => console.error('[SMS] flush on close failed:', e.message));
   });
 
   ws.on('error', (err) => console.error('[WS] Error:', err.message));

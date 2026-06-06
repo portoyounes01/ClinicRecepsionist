@@ -9,6 +9,20 @@ const { WebSocketServer } = require('ws');
 const http = require('http');
 const { handleCallStream } = require('./callHandler');
 
+// ─────────────────────────────────────────────
+// Crash safety net — one unhandled rejection/exception in a single call
+// must NOT take down the whole server and drop every other live call.
+// We log it loudly and keep serving. (A previous 2nd-call cancel crash
+// killed the container because nothing caught the async error.)
+// ─────────────────────────────────────────────
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled promise rejection (kept alive):',
+    reason && reason.stack ? reason.stack : reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception (kept alive):', err && err.stack ? err.stack : err);
+});
+
 // Shared sets — checked on every keep-alive ping
 const hangupCalls   = new Set(); // callSid → respond with <Hangup/>
 const transferCalls = new Map(); // callSid → phone number to dial
