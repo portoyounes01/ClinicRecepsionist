@@ -70,8 +70,8 @@ function transferSpeak(patient, languageState = 'pt') {
 
   const phrases = [
     `Um momento${name} — vou passar a chamada a um membro da nossa equipa que terá todo o gosto em ajudar.`,
-    `Claro${name} — só um instante enquanto o/a transfiro para um colega nosso que pode tratar disto.`,
-    `Com certeza${name} — um momento enquanto o/a passo para alguém da nossa equipa que cuida disto agora mesmo.`,
+    `Claro${name} — só um instante enquanto encaminho a chamada para um colega nosso que pode tratar disto.`,
+    `Com certeza${name} — um momento enquanto passo a chamada a alguém da nossa equipa que cuida disto agora mesmo.`,
   ];
   return phrases[Math.floor(Date.now() / 1000) % phrases.length];
 }
@@ -580,7 +580,7 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
   if (action === 'none' && askedDoctorPreference && isAffirmationOnly(userText) && motiveId) {
     return {
       action: 'check_slots',
-      speak: "Perfeito — já verifico o primeiro slot disponível para si.",
+      speak: "Perfeito — já verifico a primeira vaga disponível para si.",
       params: { ...params, motiveId, reasonText },
     };
   }
@@ -716,7 +716,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
           return {
             speak: en
               ? "I don't see anything earlier right now. The last slot I offered is still the soonest I can find. Would you like to keep it?"
-              : "Neste momento não vejo nada mais cedo. O último slot que ofereci continua a ser o mais próximo que encontro. Quer ficar com esse?",
+              : "Neste momento não vejo nada mais cedo. A última vaga que ofereci continua a ser a mais próxima que encontro. Quer ficar com essa?",
             action: 'none',
           };
         }
@@ -1546,7 +1546,7 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
   if (asksContact) {
     return speakIn(
       languageState,
-      `Pode contactar-nos pelo telefone ${info.phone}, pelo telemovel ${info.mobile}, ou por email em ${info.email}.`,
+      `Pode contactar-nos pelo telefone ${info.phone}, pelo telemóvel ${info.mobile}, ou por email em ${info.email}.`,
       `You can contact us on ${info.phone}, mobile ${info.mobile}, or by email at ${info.email}.`
     );
   }
@@ -1555,7 +1555,7 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
   if (asksServices) {
     return speakIn(
       languageState,
-      'Fazemos medicina dentaria, incluindo implantes, ortodontia, alinhadores invisiveis, facetas, branqueamento, endodontia, cirurgia oral, odontopediatria e higiene oral. Tambem temos estetica facial, osteopatia e podologia.',
+      'Fazemos medicina dentária, incluindo implantes, ortodontia, alinhadores invisíveis, facetas, branqueamento, endodontia, cirurgia oral, odontopediatria e higiene oral. Também temos estética facial, osteopatia e podologia.',
       'We provide dental care including implants, orthodontics, clear aligners, veneers, whitening, root canal treatment, oral surgery, pediatric dentistry, and hygiene appointments. We also offer facial aesthetics, osteopathy, and podiatry.'
     );
   }
@@ -1564,7 +1564,7 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
   if (asksEnglish) {
     return speakIn(
       languageState,
-      'Sim, a nossa equipa fala portugues e pode ajudar pacientes em ingles.',
+      'Sim, a nossa equipa fala português e pode ajudar pacientes em inglês.',
       'Yes, our team speaks Portuguese and can help patients in English.'
     );
   }
@@ -2106,7 +2106,7 @@ async function processTurn({
     if (repeatCount >= 2) {  // current + 2 in history = 3 total
       console.log(`[Guard] LOOP DETECTED — Vicki repeated "${speakNorm.slice(0, 50)}..." ${repeatCount + 1} times. Transferring to human.`);
       action = 'transfer_to_human';
-      speak = 'Peço desculpa — parece que não estou a conseguir ajudá-lo/a como deve ser. Vou passá-lo/a para um colega que poderá ajudar melhor.';
+      speak = 'Peço desculpa — parece que não estou a conseguir dar-lhe a ajuda que precisa. Vou passar a chamada a um colega que poderá ajudar melhor.';
       parsed.action = action;
       parsed.speak = speak;
     }

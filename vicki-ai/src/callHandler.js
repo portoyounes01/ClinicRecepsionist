@@ -563,7 +563,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       clearInterval(silenceWatchdog);
       console.log(`[Watchdog] ${silenceSec}s silence — ending call`);
       speakToCaller(
-        "I haven't heard from you in a moment — I'll let you go. Feel free to call us back anytime. Goodbye!",
+        languageState === 'en'
+          ? "I haven't heard from you in a moment — I'll let you go. Feel free to call us back anytime. Goodbye!"
+          : "Parece que ficámos sem ligação. Vou desligar por agora — pode ligar-nos novamente sempre que precisar. Até logo!",
         () => {
           if (callSid) hangupCalls.add(callSid);
           try { ws.close(); } catch (_) {}
