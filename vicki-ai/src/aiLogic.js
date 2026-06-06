@@ -1719,7 +1719,7 @@ async function processTurn({
   const stream = await openai.chat.completions.create({
     model:            LIVE_AGENT_MODEL,
     messages:         [{ role: 'system', content: systemPrompt }, ...history],
-    temperature:      0.3,
+    temperature:      0.1,
     max_completion_tokens: 300,
     reasoning_effort: 'none',
     response_format:  { type: 'json_object' },
@@ -2085,7 +2085,7 @@ async function processTurn({
       const specialistStream = await openai.chat.completions.create({
         model:            LIVE_AGENT_MODEL,
         messages:         [{ role: 'system', content: specialistPrompt }, ...history],
-        temperature:      0.3,
+        temperature:      0.1,
         max_completion_tokens: 300,
         reasoning_effort: 'none',
         response_format:  { type: 'json_object' },
