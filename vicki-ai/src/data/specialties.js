@@ -70,6 +70,12 @@ const SPECIALTIES = [
     en: 'Dental Crowns / Dental Veneers',
     doctors: [1], // Carla Vilas Boas
   },
+  {
+    id: 'aesthetic_medicine',
+    pt: 'Medicina Estética',
+    en: 'Aesthetic Treatments',
+    doctors: [32], // Dra. Aline Marodin — NEW calendar, lives in cost center 1
+  },
 ];
 
 // Keyword → specialtyId. Deterministic, server-side resolution only.
@@ -124,6 +130,14 @@ const SPECIALTY_KEYWORDS = {
     'coroa', 'coroas', 'faceta', 'facetas',
     // en
     'crown', 'crowns', 'veneer', 'veneers',
+  ],
+  aesthetic_medicine: [
+    // pt
+    'estetica', 'medicina estetica', 'botox', 'toxina botulinica', 'preenchimento',
+    'preenchimentos', 'acido hialuronico', 'rugas', 'fios tensores', 'rejuvenescimento',
+    // en
+    'aesthetic', 'aesthetics', 'botox', 'filler', 'fillers', 'wrinkle', 'wrinkles',
+    'hyaluronic', 'anti-aging', 'anti aging', 'rejuvenation',
   ],
 };
 

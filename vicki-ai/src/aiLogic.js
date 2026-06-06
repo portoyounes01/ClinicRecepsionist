@@ -632,6 +632,16 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
     case 'check_slots': {
       const slots = actionResult.slots || [];
       if (!slots.length) {
+        // Aesthetic medicine → handled only at the Quarteira clinic by Dra. Aline
+        // Marodin. Inform honestly and let the team follow up; never book here.
+        if (actionResult.aestheticExternal) {
+          return {
+            speak: en
+              ? "Aesthetic treatments like Botox or fillers are done by Doutora Aline Marodin at our Quarteira clinic, not here in Loulé. I'll have our team follow up to arrange that for you. Is there anything else I can help with?"
+              : "Os tratamentos de medicina estética, como Botox ou preenchimentos, são feitos pela Doutora Aline Marodin na nossa clínica de Quarteira, não aqui em Loulé. Vou pedir à equipa para entrar em contacto para agendar. Posso ajudar em mais alguma coisa?",
+            action: 'none',
+          };
+        }
         // Emergency with no near-term opening → connect to a human immediately. Never minimize pain.
         if (actionResult.urgent) {
           return {
@@ -859,6 +869,14 @@ async function executeAction(action, params, patient, callerNumber, history = []
       // time" without repeating "cleaning", reasonText is empty but the specialty
       // (e.g. cleaning) was established earlier, so the doctor filter must hold.
       const specialtyId = inferSpecialtyFromText(params.reasonText || params._bookingReasonText || params._reasonText || '');
+
+      // Aesthetic medicine is ONLY done by Dra. Aline Marodin at the QUARTEIRA
+      // clinic — never bookable on this Loulé line. Never search dental slots for
+      // it (that would wrongly offer a dentist); hand off to the team instead.
+      if (specialtyId === 'aesthetic_medicine') {
+        return { slots: [], aestheticExternal: true };
+      }
+
       let specialtyDocs = [];
       if (specialtyId) {
         specialtyDocs = doctorsForSpecialty(specialtyId, LOULE_DOCTOR_IDS);

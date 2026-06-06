@@ -13,6 +13,8 @@ const CLINIC_ID      = parseInt(process.env.NEWSOFT_CLINIC_ID);
 const COST_CENTER_ID = parseInt(process.env.NEWSOFT_COST_CENTER_ID);
 
 // Only real doctors at Loulé — excludes reception/admin entries like 'Atendimento Margarida'
+// NOTE: Dra. Aline Marodin (32, aesthetic medicine) is NOT here — she only works
+// at the Quarteira clinic, so she is never offered/booked on this Loulé line.
 const LOULE_DOCTOR_IDS = new Set([1, 3, 11, 13, 25, 33, 36, 39]);
 
 function authHeader(token) {
