@@ -1022,12 +1022,16 @@ async function executeAction(action, params, patient, callerNumber, history = []
       // slot they declined. Match on the opaque slot token so it's exact. Keep
       // the pool if exclusion empties it (better to repeat than to wrongly claim
       // no availability).
-      if (Array.isArray(params._pendingSlots) && params._pendingSlots.length) {
-        const rejected = new Set(params._pendingSlots.map(s => s.slotBase64).filter(Boolean));
+      {
+        const shown = [
+          ...(Array.isArray(params._pendingSlots) ? params._pendingSlots : []),
+          ...(Array.isArray(params._offeredSlots) ? params._offeredSlots : []),
+        ];
+        const rejected = new Set(shown.map(s => s.slotBase64).filter(Boolean));
         if (rejected.size) {
           const fresh = pool.filter(s => !rejected.has(s.appointmentSlotBase64RawData));
           if (fresh.length) {
-            if (fresh.length !== pool.length) console.log(`[Slots] excluding ${pool.length - fresh.length} just-offered slot(s) so they aren't re-offered`);
+            if (fresh.length !== pool.length) console.log(`[Slots] excluding ${pool.length - fresh.length} already-offered slot(s) so they aren't re-offered`);
             pool = fresh;
           }
         }
@@ -1619,6 +1623,7 @@ async function processTurn({
   unclearTurns   = 0,
   onSpeakReady   = null,
   pendingSlots   = [],
+  offeredSlots   = [],   // every slot shown this call — never re-offer them on "another day"
   pendingAppts   = [],
   patientMemory  = null,
   lastOfferedDate = null,
@@ -2265,6 +2270,7 @@ async function processTurn({
                 _datePref: resolveDatePreference(userText, new Date().toISOString().split('T')[0]),
                 _bookingReasonText: updatedBookingReasonText,
                 _pendingSlots: pendingSlots,   // for doctor rotation on rejection
+                _offeredSlots: offeredSlots,   // never re-offer any slot shown earlier this call
                 _patientNamedDoctor: patientNamedDoctor(userText, cachedDoctors),
               }
             : params;

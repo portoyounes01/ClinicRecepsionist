@@ -192,9 +192,21 @@ function validateSpecialties(cachedDoctors = []) {
 // Build a human/LLM-facing description of specialties + their doctors,
 // in the caller's language, using ONLY bookable doctors that exist in
 // the live cache. Used to inject grounded data into the booking prompt.
+// Expand "Dra."/"Dr." abbreviations to full words so the TTS speaks "Doutora"
+// / "Doutor" instead of spelling out the letters "D-R-A".
+function expandTitle(name = '') {
+  return String(name || '')
+    .replace(/\bDr\.?\s*ª\b/gi, 'Doutora')
+    .replace(/\bDr\.?\s*a\.?\b/gi, 'Doutora')
+    .replace(/\bDra\.?\b/gi, 'Doutora')
+    .replace(/\bDr\.?\b/gi, 'Doutor')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function buildSpecialtyPromptBlock(cachedDoctors = [], bookableIds, lang = 'pt') {
   const en = lang === 'en';
-  const nameById = new Map((cachedDoctors || []).map(d => [d.medicId, d.medicShortName || d.medicName]));
+  const nameById = new Map((cachedDoctors || []).map(d => [d.medicId, expandTitle(d.medicShortName || d.medicName)]));
   const allow = bookableIds
     ? (bookableIds instanceof Set ? bookableIds : new Set(bookableIds))
     : null;

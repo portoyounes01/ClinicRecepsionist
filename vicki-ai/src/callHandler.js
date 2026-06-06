@@ -25,6 +25,18 @@ const CLINIC_INFO = {
   hours:    process.env.CLINIC_HOURS,
 };
 
+// Accumulate every slot shown this call (dedup by token) so an "another day"
+// search never re-offers one the patient already saw — prevents the rotation
+// from ping-ponging between the same two slots.
+function accumulateOffered(offered, justShown) {
+  const seen = new Set((offered || []).map(s => s.slotBase64));
+  const out = (offered || []).slice();
+  for (const s of justShown || []) {
+    if (s && s.slotBase64 && !seen.has(s.slotBase64)) { seen.add(s.slotBase64); out.push(s); }
+  }
+  return out.slice(-30); // cap memory
+}
+
 function lookupBridgeFor(userText, currentAgent, pendingSlots) {
   if (currentAgent !== 'booking' || !pendingSlots?.length) return null;
   const text = (userText || '').toLowerCase();
@@ -283,6 +295,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
   let processingTimer     = null;
   let pendingSlots        = [];
+  let offeredSlots        = [];     // EVERY slot shown this call — so "another day" never re-offers one
   let pendingAppts        = [];
   let lastOfferedDate     = null;   // date of last slot shown — next search skips past it
   let bookingReasonText   = null;
@@ -634,6 +647,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         unclearTurns,
         onSpeakReady,
         pendingSlots,
+        offeredSlots,
         pendingAppts,
         patientMemory,
         lastOfferedDate,
@@ -649,7 +663,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       if (result.languageState !== undefined) languageState = result.languageState;
       if (result.currentAgent   !== undefined) currentAgent   = result.currentAgent;
       if (result.unclearTurns   !== undefined) unclearTurns   = result.unclearTurns;
-      if (result.pendingSlots   && result.pendingSlots.length)  pendingSlots  = result.pendingSlots;
+      if (result.pendingSlots   && result.pendingSlots.length)  { pendingSlots  = result.pendingSlots; offeredSlots = accumulateOffered(offeredSlots, result.pendingSlots); }
       if (result.pendingAppts   !== undefined) pendingAppts  = result.pendingAppts;
       if (result.lastOfferedDate !== undefined) lastOfferedDate = result.lastOfferedDate;
       if (result.bookingReasonText !== undefined) bookingReasonText = result.bookingReasonText;
@@ -757,6 +771,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
             unclearTurns,
             onSpeakReady:     null,
             pendingSlots,
+            offeredSlots,
             pendingAppts,
             patientMemory,
             lastOfferedDate,
@@ -775,7 +790,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           conversationHistory = autoResult.history;
           if (autoResult.languageState !== undefined) languageState = autoResult.languageState;
           if (autoResult.currentAgent   !== undefined) currentAgent   = autoResult.currentAgent;
-          if (autoResult.pendingSlots   && autoResult.pendingSlots.length)  pendingSlots  = autoResult.pendingSlots;
+          if (autoResult.pendingSlots   && autoResult.pendingSlots.length)  { pendingSlots  = autoResult.pendingSlots; offeredSlots = accumulateOffered(offeredSlots, autoResult.pendingSlots); }
           if (autoResult.pendingAppts   !== undefined) pendingAppts  = autoResult.pendingAppts;
           if (autoResult.bookingReasonText !== undefined) bookingReasonText = autoResult.bookingReasonText;
           if (autoResult.lastOfferedDate !== undefined) lastOfferedDate = autoResult.lastOfferedDate;
