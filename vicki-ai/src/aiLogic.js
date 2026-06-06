@@ -1804,6 +1804,20 @@ async function processTurn({
       if (candidates.length === 1 || (candidates.length > 1 && candidates[0].score > candidates[1].score)) {
         // Confident single match
         const best = candidates[0];
+
+        // Don't bulldoze a QUESTION into a slot search. If the LLM already named
+        // this doctor AND is asking the patient something (e.g. "...only Dr.
+        // Hermes. Would you like me to check his availability?"), it's seeking
+        // confirmation — the patient merely mentioned the name in a question,
+        // they did NOT commit to booking. Forcing check_slots here skips the
+        // patient's choice of doctor / soonest-appointment preference.
+        const llmSpeakNorm = norm(speak);
+        const llmAlreadyHandling = /\?/.test(speak || '')
+          && best.matchedParts.some(p => llmSpeakNorm.includes(p));
+
+        if (llmAlreadyHandling) {
+          console.log(`[Guard] DOCTOR MATCH skipped — LLM already named ${best.doc.medicShortName} and is awaiting the patient's confirmation.`);
+        } else {
         console.log(`[Guard] DOCTOR MATCH — "${userText}" → ${best.doc.medicShortName} (id:${best.doc.medicId}) [matched: ${best.matchedParts.join(', ')}]`);
 
         // ── SPECIALTY CHECK: does this doctor actually do the requested treatment? ──
@@ -1842,6 +1856,7 @@ async function processTurn({
         parsed.action = action;
         parsed.speak = speak;
         parsed.params = params;
+        }
       }
     }
   }
