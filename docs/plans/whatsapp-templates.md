@@ -4,14 +4,26 @@ Submit these in **Meta Business Manager → WhatsApp Manager → Message templat
 
 General settings for all three:
 - **Category:** Utility (see ⚠️ note on recare).
-- **Languages:** add **Portuguese (pt_PT)**. Add **English (en)** too if you want bilingual sends (the code already picks `en` for English-speaking patients).
-- **Buttons:** type = **Quick reply** (the tap payload is set by our code at send time; you only set the button text).
+- **Languages:** add **BOTH Portuguese (pt_PT) AND English (en)** for every template (same template name, two language versions). The code auto-picks `en` for English-speaking patients, `pt_PT` otherwise.
+- **Buttons:** two kinds are used below —
+  - **Quick reply** = a tappable reply; our code sets the tap action. You only type the button text.
+  - **Call phone number** (a Call-to-action button) = when tapped it **dials the clinic directly**. It's static — you enter the label + the clinic phone number in Meta, and the code sends nothing for it.
+  - Meta rule: quick-reply buttons must be listed **before** call buttons. Max 1 phone button per template.
+
+### 👉 What buttons to add (quick reference)
+| Template | Button 1 | Button 2 |
+|---|---|---|
+| `appointment_reminder` | **Quick reply** — `Confirmar` / `Confirm` | **Call phone number** — `Remarcar/Cancelar` / `Reschedule/Cancel` → clinic phone |
+| `review_request` | *(none)* | — |
+| `recare_reminder` | **Quick reply** — `Marcar` / `Book` | — |
 
 ---
 
 ## 1. `appointment_reminder`  (Utility)
 Variables: `{{1}}` = clinic name · `{{2}}` = date (e.g. 09/06/2026) · `{{3}}` = time (e.g. 14:30)
-Buttons (quick reply, in this order): **Confirmar**, **Cancelar**
+Buttons (in this order):
+1. **Quick reply** — text: `Confirmar` (pt) / `Confirm` (en) → confirms the appointment in Newsoft.
+2. **Call phone number** — text: `Remarcar/Cancelar` (pt) / `Reschedule/Cancel` (en) · phone: the clinic number (E.164, e.g. `+351 289 …`). Tapping dials the clinic so a human handles the reschedule/cancel. We never auto-cancel from a tap.
 
 **Portuguese (pt_PT) body:**
 ```
@@ -21,7 +33,7 @@ Lembrete de consulta — {{1}}.
 
 Tem uma marcação para {{2}} às {{3}}.
 
-Por favor, confirme a sua presença nos botões abaixo. Obrigada!
+Confirme a sua presença abaixo. Para remarcar ou cancelar, ligue-nos através do botão. Obrigada!
 ```
 
 **English (en) body:**
@@ -32,9 +44,8 @@ Appointment reminder — {{1}}.
 
 You have a booking on {{2}} at {{3}}.
 
-Please confirm your attendance using the buttons below. Thank you!
+Please confirm below. To reschedule or cancel, call us using the button. Thank you!
 ```
-Buttons (en): **Confirm**, **Cancel**
 
 **Sample values for Meta:** {{1}}=`Instituto Vilas Boas` · {{2}}=`09/06/2026` · {{3}}=`14:30`
 
@@ -68,7 +79,7 @@ See you soon!
 
 ## 3. `recare_reminder`  (Utility — ⚠️ may be classed as Marketing)
 Variables: `{{1}}` = clinic name
-Buttons (quick reply): **Marcar**
+Buttons: **Quick reply** — `Marcar` (pt) / `Book` (en). (Tapping replies with how to book; it does not auto-book — booking goes through the voice line.)
 > Also reused for **reactivation** (dormant patients) unless you set a separate `WHATSAPP_TEMPLATE_REACTIVATION`.
 
 **Portuguese (pt_PT) body:**

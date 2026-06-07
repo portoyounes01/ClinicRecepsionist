@@ -23,6 +23,11 @@
 
 ## LOG
 
+### 2026-06-07 — Template buttons revised (per user)
+- Reminder buttons changed: **Confirmar** (quick reply) + **Remarcar/Cancelar** as a **Call phone number** CTA that dials the clinic (no self-service auto-cancel). Verified via Meta docs that quick-reply + call button can coexist (grouped, max 1 phone btn).
+- Code: [reminder.js](../../vicki-ai/src/lifecycle/reminder.js) now sends only the confirm quick-reply; the call button is static in the template (no component). The old `cancel:` webhook branch is now unused (left in place, harmless).
+- All 3 templates to be submitted in **both pt_PT and en**.
+
 ### 2026-06-07 — Task 1.4 drafted (WhatsApp templates)
 Wrote [whatsapp-templates.md](whatsapp-templates.md): `appointment_reminder` (vars clinic/date/time, buttons Confirmar/Cancelar), `review_request` (vars clinic/link, no buttons), `recare_reminder` (var clinic, button Marcar). pt-PT + EN, variable order matches the code exactly. Ready for the user to submit to Meta. Flagged that recare may be classed as Marketing.
 

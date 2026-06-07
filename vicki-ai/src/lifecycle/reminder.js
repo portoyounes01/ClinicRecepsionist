@@ -128,9 +128,12 @@ async function handleReminderJob(payload) {
   const sent = await wa.sendTemplate(clinic, tracked.phone_e164, clinic.whatsapp.templates.reminder, {
     lang: tracked.language === 'en' ? 'en' : 'pt_PT',
     bodyParams: [clinic.name, dateStr, timeStr],
+    // Button 0 = "Confirmar" (quick reply → confirms in Newsoft).
+    // Button 1 in the template is a STATIC "Call phone number" CTA
+    // (Remarcar/Cancelar → dials the clinic so a human handles it), which
+    // needs no send-time component. We never auto-cancel from a button tap.
     buttons: [
       { index: 0, payload: `confirm:${tracked.id}` },
-      { index: 1, payload: `cancel:${tracked.id}` },
     ],
   });
 
