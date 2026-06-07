@@ -76,7 +76,7 @@ async function handleRecareJob(payload) {
 
   const sent = await wa.sendTemplate(clinic, p.phone_e164, clinic.whatsapp.templates.recare, {
     lang: p.language === 'en' ? 'en' : 'pt_PT',
-    bodyParams: [clinic.name],
+    bodyParams: [wa.firstName(p.name, p.language), clinic.name],
     buttons: [{ index: 0, payload: `recare_book:${p.id}` }],
   });
   if (sent) {

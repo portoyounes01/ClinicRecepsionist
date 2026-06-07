@@ -179,6 +179,10 @@ function isBackchannel(text) {
 // grace for them to continue; complete-sounding phrases still fire instantly (speed).
 const ENDPOINT_GRACE_MS = Math.max(0, parseInt(process.env.ENDPOINT_GRACE_MS || '700', 10));
 const INITIAL_RING_DELAY_MS = Math.max(0, parseInt(process.env.INITIAL_RING_DELAY_MS || '4000', 10));
+// Deliberate pause after the "let me check the availability" line finishes, before
+// Vicki reads the slots — so she sounds like a human looking it up instead of
+// cutting the line and racing the slot offer. Tunable without a deploy.
+const SLOT_LOOKUP_DWELL_MS = Math.max(0, parseInt(process.env.SLOT_LOOKUP_DWELL_MS || '3000', 10));
 
 const _norm = s => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim();
 
@@ -916,25 +920,34 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
       // ── Speak the response ───────────────────────────────────────────
       if (result.actionFired && result.speak) {
-        // check_slots: bridge was a loading phrase — abort it immediately and speak slots.
-        // book/cancel: abort bridge and speak the API result.
-        // Both cases: always stop whatever was playing and speak the real result.
         const isSlotResult = result.actionFired === 'check_slots';
-        if (speakStarted && currentAbort) {
-          currentAbort('action-result');
-          currentAbort = null;
+        if (isSlotResult && speakStarted) {
+          // SLOT LOOKUP: let the "deixe-me verificar a disponibilidade" line play
+          // to the END (no abort), then pause like a human looking it up, then read
+          // the slots. bridgePromise resolves when the line's playback-done mark
+          // fires; cap it so we never hang if the mark is missed.
+          await Promise.race([bridgePromise, new Promise(r => setTimeout(r, 9000))]);
+          await new Promise(r => setTimeout(r, SLOT_LOOKUP_DWELL_MS));
+          isSpeaking = true;
+          await speakNow(result.speak, () => { isSpeaking = false; currentAbort = null; });
+        } else {
+          // book/cancel (and slot results with no acknowledgement playing): stop
+          // whatever was playing and speak the definitive result promptly.
+          if (speakStarted && currentAbort) {
+            currentAbort('action-result');
+            currentAbort = null;
+          }
+          // For barge-in scenarios: bridgePromise may already be resolved.
+          // Use race with a 300ms timeout so we never hang waiting for bridge.
+          if (speakStarted) {
+            await Promise.race([
+              bridgePromise,
+              new Promise(r => setTimeout(r, 300)),
+            ]);
+          }
+          isSpeaking = true;
+          await speakNow(result.speak, () => { isSpeaking = false; currentAbort = null; });
         }
-        // For barge-in scenarios: bridgePromise may already be resolved.
-        // Use race with a 300ms timeout so we never hang waiting for bridge.
-        if (speakStarted) {
-          await Promise.race([
-            bridgePromise,
-            new Promise(r => setTimeout(r, 300)),
-          ]);
-        }
-        // Now speak the definitive API result (slots, booking/cancel confirmation, etc.)
-        isSpeaking = true;
-        await speakNow(result.speak, () => { isSpeaking = false; currentAbort = null; });
       } else if (result.action === 'transfer_to_human' && result.speak) {
         // TRANSFER: always abort the early AI speak and replay with the mandatory hold message.
         if (speakStarted && currentAbort) {

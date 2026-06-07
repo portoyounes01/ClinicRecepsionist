@@ -67,7 +67,7 @@ function reviewLink(clinic, token) {
 // ─── Job: send the review request (WhatsApp + SMS) ─────────────────────────────
 async function handleReviewRequestJob(payload) {
   const review = await db.one(
-    `SELECT r.*, p.phone_e164, p.language, p.opt_out_whatsapp, p.opt_out_sms
+    `SELECT r.*, p.name, p.phone_e164, p.language, p.opt_out_whatsapp, p.opt_out_sms
        FROM reviews r JOIN patients p ON p.id = r.patient_id
       WHERE r.id IS NOT NULL AND r.token=$1`, [payload.token]
   );
@@ -83,7 +83,7 @@ async function handleReviewRequestJob(payload) {
   if (!review.opt_out_whatsapp) {
     const sent = await wa.sendTemplate(clinic, review.phone_e164, clinic.whatsapp.templates.review, {
       lang: review.language === 'en' ? 'en' : 'pt_PT',
-      bodyParams: [clinic.name, link],
+      bodyParams: [wa.firstName(review.name, review.language), clinic.name, link],
     });
     if (sent) {
       await db.query(
@@ -118,7 +118,7 @@ async function handleReviewRequestJob(payload) {
 // ─── Job: nudge if not completed ───────────────────────────────────────────────
 async function handleReviewNudgeJob(payload) {
   const review = await db.one(
-    `SELECT r.*, p.phone_e164, p.language, p.opt_out_whatsapp
+    `SELECT r.*, p.name, p.phone_e164, p.language, p.opt_out_whatsapp
        FROM reviews r JOIN patients p ON p.id = r.patient_id WHERE r.token=$1`, [payload.token]
   );
   if (!review || review.completed) return;            // done -> stop
@@ -132,7 +132,7 @@ async function handleReviewNudgeJob(payload) {
   if (!review.opt_out_whatsapp) {
     await wa.sendTemplate(clinic, review.phone_e164, clinic.whatsapp.templates.review, {
       lang: review.language === 'en' ? 'en' : 'pt_PT',
-      bodyParams: [clinic.name, link],
+      bodyParams: [wa.firstName(review.name, review.language), clinic.name, link],
     });
   }
   const newCount = review.nudge_count + 1;

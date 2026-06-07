@@ -48,7 +48,43 @@ async function bootLifecycle(app) {
   // enqueue their messages). Runs once at boot, then every 24h.
   startDailySweeps();
 
+  // Daily reminder batch at a fixed clinic-local time (default 07:30): message
+  // every patient whose appointment is REMINDER_DAYS_AHEAD days out.
+  scheduleDailyReminderSweep();
+
   console.log('[Lifecycle] Engine booted');
+}
+
+// Daily reminder batch at a fixed wall-clock time (clinic-local; set
+// TZ=Europe/Lisbon on the host). Re-computes the next run after each fire so
+// it stays on 07:30 across DST changes (unlike a flat 24h interval).
+const SWEEP_HOUR = parseInt(process.env.REMINDER_SWEEP_HOUR || '7', 10);
+const SWEEP_MIN  = parseInt(process.env.REMINDER_SWEEP_MIN  || '30', 10);
+
+function scheduleDailyReminderSweep() {
+  const { allClinics } = require('../clinics/registry');
+  const reminder = require('./reminder');
+
+  const runSweep = async () => {
+    for (const clinic of allClinics()) {
+      try { await reminder.sweepDailyReminders(clinic); }
+      catch (e) { console.error('[Reminder] daily sweep error:', e.message); }
+    }
+  };
+  const msUntilNext = () => {
+    const now = new Date();
+    const next = new Date(now);
+    next.setHours(SWEEP_HOUR, SWEEP_MIN, 0, 0);
+    if (next <= now) next.setDate(next.getDate() + 1);
+    return next - now;
+  };
+  const arm = () => {
+    const ms = msUntilNext();
+    const hhmm = `${String(SWEEP_HOUR).padStart(2, '0')}:${String(SWEEP_MIN).padStart(2, '0')}`;
+    console.log(`[Reminder] Daily sweep scheduled — next run in ${Math.round(ms / 3600000)}h (${hhmm})`);
+    setTimeout(async () => { await runSweep(); arm(); }, ms);
+  };
+  arm();
 }
 
 function startDailySweeps() {

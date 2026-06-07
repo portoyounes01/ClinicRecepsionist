@@ -131,6 +131,16 @@ async function sendText(clinic, to, text) {
   }
 }
 
+/**
+ * First name for greetings (e.g. "Olá *João*"). WhatsApp rejects empty
+ * template variables, so this always returns a non-empty value.
+ */
+function firstName(name, lang) {
+  const f = String(name || '').trim().split(/\s+/)[0];
+  if (f) return f.charAt(0).toUpperCase() + f.slice(1);
+  return lang === 'en' ? 'there' : 'Paciente';
+}
+
 // ─── Webhook: GET verification handshake ───────────────────────────────────────
 /**
  * Handle Meta's GET verification. Returns the challenge string to echo
@@ -208,5 +218,5 @@ function parseInbound(payload) {
 module.exports = {
   sendTemplate, sendText,
   verifyWebhookSubscription, verifySignature, parseInbound,
-  toWaNumber,
+  toWaNumber, firstName,
 };

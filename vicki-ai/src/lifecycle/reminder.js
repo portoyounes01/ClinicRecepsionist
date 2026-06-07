@@ -101,10 +101,76 @@ async function trackAppointment(clinic, appt) {
   return tracked.id;
 }
 
+// ─── Daily batch sweep: remind everyone with an appointment N days out ─────────
+// Pulls ALL clinic appointments for the target day from Newsoft and enqueues a
+// reminder for each REAL, eligible patient appointment. Called once each morning
+// (07:30 via boot.js). Idempotent: appointments_tracked + job idempotency keys
+// prevent duplicate reminders, so it's safe to re-run the same day.
+const DAYS_AHEAD = parseInt(process.env.REMINDER_DAYS_AHEAD || '2', 10);
+
+async function sweepDailyReminders(clinic) {
+  if (!db.isEnabled()) return 0;
+
+  const target = new Date();
+  target.setDate(target.getDate() + DAYS_AHEAD);
+  const dayStr = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+
+  let appts;
+  try {
+    appts = await newsoft.getAppointmentsByDateRange(`${dayStr}T00:00:00.000`, `${dayStr}T23:59:59.000`);
+  } catch (e) {
+    console.error('[Reminder] Daily sweep — Newsoft fetch failed:', e.message);
+    return 0;
+  }
+
+  const doctorIds = new Set((clinic.doctorIds || []).map(Number));
+  let queued = 0, skipped = 0;
+
+  for (const a of appts) {
+    const phone = a.patientPhoneNumber || a.patientPhoneNumber2;
+    // Real patient appointments only — known doctor (filters reception/admin
+    // blocks like "Nao marcar"), has a phone, eligible status, real patient.
+    if (doctorIds.size && !doctorIds.has(Number(a.medicId))) { skipped++; continue; }
+    if (!phone || !a.appointmentId || !a.patientId) { skipped++; continue; }
+    if (!isEligibleStatus(a.appointmentStatusCode)) { skipped++; continue; }
+
+    const patientId = await upsertPatient({
+      clinicId: clinic.id,
+      newsoftPatientId: a.patientId,
+      name: a.patientName,
+      phone,
+      language: null, // Newsoft has no language; upsert keeps any known value
+    });
+
+    const tracked = await db.one(
+      `INSERT INTO appointments_tracked
+         (clinic_id, patient_id, newsoft_appointment_id, appointment_at, status_code_at_send, source)
+         VALUES ($1,$2,$3,$4,$5,'newsoft_sweep')
+       ON CONFLICT (clinic_id, newsoft_appointment_id) DO UPDATE SET updated_at=now()
+       RETURNING id, reminder_sent_at`,
+      [clinic.id, patientId, String(a.appointmentId),
+       a.appointmentDateBeginLocal || a.appointmentDateBegin, a.appointmentStatusCode || '']
+    );
+    if (tracked.reminder_sent_at) { skipped++; continue; } // already reminded
+
+    await scheduler.enqueue({
+      clinicId: clinic.id,
+      type: JOB_REMINDER,
+      runAt: new Date(),
+      payload: { trackedId: tracked.id },
+      idempotencyKey: `reminder:${clinic.id}:${a.appointmentId}`,
+    });
+    queued++;
+  }
+
+  console.log(`[Reminder] Daily sweep ${clinic.id} for ${dayStr}: ${queued} queued, ${skipped} skipped, ${appts.length} fetched`);
+  return queued;
+}
+
 // ─── Job handler: send the WhatsApp reminder ───────────────────────────────────
 async function handleReminderJob(payload) {
   const tracked = await db.one(
-    `SELECT a.*, p.phone_e164, p.language, p.opt_out_whatsapp
+    `SELECT a.*, p.name, p.phone_e164, p.language, p.opt_out_whatsapp
        FROM appointments_tracked a JOIN patients p ON p.id = a.patient_id
       WHERE a.id = $1`, [payload.trackedId]
   );
@@ -122,12 +188,14 @@ async function handleReminderJob(payload) {
   if (!clinic) return;
 
   const when = new Date(tracked.appointment_at);
-  const dateStr = when.toLocaleDateString('pt-PT', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const timeStr = when.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const locale = tracked.language === 'en' ? 'en-GB' : 'pt-PT';
+  const dateStr = when.toLocaleDateString(locale, { weekday: 'long', day: '2-digit', month: 'long' });
+  const timeStr = when.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false });
+  const fName = wa.firstName(tracked.name, tracked.language);
 
   const sent = await wa.sendTemplate(clinic, tracked.phone_e164, clinic.whatsapp.templates.reminder, {
     lang: tracked.language === 'en' ? 'en' : 'pt_PT',
-    bodyParams: [clinic.name, dateStr, timeStr],
+    bodyParams: [fName, clinic.name, dateStr, timeStr],
     // Button 0 = "Confirmar" (quick reply → confirms in Newsoft).
     // Button 1 in the template is a STATIC "Call phone number" CTA
     // (Remarcar/Cancelar → dials the clinic so a human handles it), which
@@ -207,7 +275,7 @@ function register() {
 }
 
 module.exports = {
-  trackAppointment, handleButton, register,
+  trackAppointment, sweepDailyReminders, handleButton, register,
   isEligibleStatus,
   handleReminderJob, // exported for tests
   JOB_REMINDER, JOB_CONFIRM_CALL,

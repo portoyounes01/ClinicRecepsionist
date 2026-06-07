@@ -206,6 +206,26 @@ async function getPatientAppointments(patientId) {
 }
 
 // ─────────────────────────────────────────────
+// APPOINTMENTS: Get ALL clinic appointments in a date range (no patient
+// filter). Used by the daily reminder sweep. Read-only.
+// dateBegin/dateEnd are ISO datetime strings, e.g. '2026-06-08T00:00:00.000'.
+// ─────────────────────────────────────────────
+async function getAppointmentsByDateRange(dateBegin, dateEnd) {
+  const token = await cache.getToken();
+  const res = await axios.get(`${BASE_URL}/appointments`, {
+    headers: authHeader(token),
+    params: {
+      ...clinicParams(),
+      DateBegin: dateBegin,
+      DateEnd:   dateEnd,
+      IncludeScheduledAppointments: true,
+      IncludeConfirmedAppointments: true,
+    },
+  });
+  return res.data || [];
+}
+
+// ─────────────────────────────────────────────
 // BOOK: Create a new appointment
 // ─────────────────────────────────────────────
 async function bookAppointment({ patientId, slotBase64, motiveName, observation }) {
@@ -303,6 +323,7 @@ module.exports = {
   getMotives:             dryWrap('getMotives', cache.getMotives),   // re-export from cache
   getAvailableSlots:      dryWrap('getAvailableSlots', getAvailableSlots),
   getPatientAppointments: dryWrap('getPatientAppointments', getPatientAppointments),
+  getAppointmentsByDateRange: dryWrap('getAppointmentsByDateRange', getAppointmentsByDateRange),
   bookAppointment:        dryWrap('bookAppointment', bookAppointment),
   cancelAppointment:      dryWrap('cancelAppointment', cancelAppointment),
   confirmAppointment:     dryWrap('confirmAppointment', confirmAppointment),

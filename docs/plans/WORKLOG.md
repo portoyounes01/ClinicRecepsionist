@@ -23,6 +23,17 @@
 
 ## LOG
 
+### 2026-06-07 — Daily 07:30 reminder batch + personalized templates (built)
+Implemented the user's batch model: **once each morning at 07:30, message everyone with an appointment `today+2`** (date-based), clinic-wide.
+- `newsoftApi.js`: new `getAppointmentsByDateRange(begin,end)` (clinic-wide, no PatientId) + export.
+- `reminder.js`: new `sweepDailyReminders(clinic)` — fetch the day's appts, filter **real doctor (clinic.doctorIds) + has phone + eligible status (blank/Z)**, upsert patient + appointments_tracked (idempotent), enqueue `reminder_whatsapp`. `handleReminderJob` already schedules the 24h confirm-call, so no separate confirm sweep needed. Updated it to use **first name + weekday/day/month date**, `bodyParams:[firstName, clinic, date, time]`.
+- `boot.js`: `scheduleDailyReminderSweep()` — fires at 07:30 clinic-local (re-arms each day; DST-safe). Needs `TZ=Europe/Lisbon`.
+- `whatsapp.js`: `firstName(name,lang)` helper exported (safe non-empty fallback).
+- `reviews.js`/`recare.js`/`reactivation.js`: bodyParams now lead with `firstName`.
+- Templates ([whatsapp-templates.md](whatsapp-templates.md)) rewritten warm/branded/bilingual, `{{1}}`=name, "Bom dia" on reminder (always morning), "Olá" on review/recare.
+- **Verified vs live Newsoft (read-only):** real field names (`appointmentDateBeginLocal`, `appointmentStatusCode`, `patientPhoneNumber`, `appointmentId`, `medicId`); list returns phones for ~71% of appts (97/136 known-doctor over 30 days); the sweep correctly excludes admin/blocked entries ("Nao marcar", reception medicIds). Diagnostics kept: `scripts/check-status-codes.js`, `scripts/check-sweep-preview.js`.
+- All 7 files `node -c` clean; `npm run test:lifecycle` passes (reminder send shows 1 button as intended). Note: `trackAppointment` (old per-appt path, never called) is superseded by the sweep; idempotency keys prevent any double-send.
+
 ### 2026-06-07 — Template buttons revised (per user)
 - Reminder buttons changed: **Confirmar** (quick reply) + **Remarcar/Cancelar** as a **Call phone number** CTA that dials the clinic (no self-service auto-cancel). Verified via Meta docs that quick-reply + call button can coexist (grouped, max 1 phone btn).
 - Code: [reminder.js](../../vicki-ai/src/lifecycle/reminder.js) now sends only the confirm quick-reply; the call button is static in the template (no component). The old `cancel:` webhook branch is now unused (left in place, harmless).
