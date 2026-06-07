@@ -1,6 +1,8 @@
 # Vicki — Plans
 
-Single home for all Vicki plans. Read [overview-super-vicki.md](overview-super-vicki.md) first for the big picture.
+👉 **Start here: [ROADMAP.md](ROADMAP.md)** — the master plan (all epics + mini-tasks, in order, with what's blocked vs doable now).
+
+Then [overview-super-vicki.md](overview-super-vicki.md) for the big-picture context.
 
 Plans are bucketed by status. **To re-sort, just move a file between the `todo/`, `in-progress/`, and `done/` folders** and update its row below.
 
