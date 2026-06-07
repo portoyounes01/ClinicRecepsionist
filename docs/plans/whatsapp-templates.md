@@ -128,28 +128,24 @@ Variables: `{{1}}` first name · `{{2}}` clinic · button: Quick reply `Marcar`/
 
 **Portuguese (pt_PT):**
 ```
-Olá *{{1}}*,
+Olá *{{1}}*! 🦷
 
-Já passou algum tempo desde a sua última visita — {{2}}. 🦷
+Aqui é a equipa {{2}}. Esperamos que esteja tudo bem consigo e com o seu sorriso! 😊
 
-Para manter o seu sorriso saudável, recomendamos uma consulta de rotina.
+Já passou algum tempo desde a sua última visita e lembrámo-nos de si. Uma consulta de rotina ajuda a cuidar da sua saúde oral e a prevenir pequenos problemas antes de se tornarem maiores.
 
-Toque em *Marcar* e a nossa equipa ajuda a agendar.
-
-Estamos aqui para ajudar a manter o seu *sorriso com confiança!*
+Sempre que for melhor para si, estamos aqui. É só tocar em *Marcar*. 💙
 ```
 
 **English (en):**
 ```
-Hello *{{1}}*,
+Hi *{{1}}*! 🦷
 
-It's been a while since your last visit — {{2}}. 🦷
+It's the {{2}} team. We hope you and your smile are doing well! 😊
 
-To keep your smile healthy, we recommend a routine check-up.
+It's been a little while since your last visit and you crossed our minds. A routine check-up helps look after your oral health and catch small things before they grow.
 
-Tap *Book* and our team will help you schedule.
-
-We're here to help keep your *smile confident!*
+Whenever it works for you, we're here. Just tap *Book*. 💙
 ```
 
 **Sample:** {{1}}=`Valter` · {{2}}=`Instituto Vilas Boas`
