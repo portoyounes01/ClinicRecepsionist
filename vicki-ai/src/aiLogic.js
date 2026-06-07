@@ -2200,11 +2200,17 @@ async function processTurn({
     const explicitBookingConfirmation = isExplicitBookingConfirmation(userText) || isExplicitBookingConfirmation(speak);
     if (!explicitBookingConfirmation) {
       console.warn('[Guard] booking confirmation required ? blocking auto-book until explicit phrase is spoken.');
-      return {
+      // MUST return history (via finalize) — omitting it set conversationHistory to
+      // undefined in callHandler and crashed the NEXT turn at the history trim,
+      // which swallowed goodbyes ("Bye") into an error-reprompt loop.
+      return finalize({
         action: 'none',
         speak: 'Antes de marcar, diga: "I confirm to book this appointment."',
         params,
-      };
+        history,
+        currentAgent,
+        bookingReasonText: updatedBookingReasonText,
+      });
     }
   }
 

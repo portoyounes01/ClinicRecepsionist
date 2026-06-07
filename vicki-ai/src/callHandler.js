@@ -861,6 +861,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // ── History trimmer — keep max 24 messages, always preserve slot/appt context ──
       // Large histories slow the AI and increase hallucination risk.
       const MAX_HISTORY = 24;
+      if (!Array.isArray(conversationHistory)) conversationHistory = []; // never crash the trim
       if (conversationHistory.length > MAX_HISTORY) {
         // Identify critical system messages to preserve (slots, appointments)
         const criticalKeywords = ['slotBase64=', '[ref:', 'Slots disponíveis', 'Consultas do paciente', 'RETOMA DA MARCAÇÃO'];
@@ -895,7 +896,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       });
       clearTimeout(patienceTimer); // cancel filler if API was fast
 
-      conversationHistory = result.history;
+      if (Array.isArray(result.history)) conversationHistory = result.history; // never poison with undefined
       if (result.languageState !== undefined) languageState = result.languageState;
       if (result.currentAgent   !== undefined) currentAgent   = result.currentAgent;
       if (result.unclearTurns   !== undefined) unclearTurns   = result.unclearTurns;
@@ -1037,7 +1038,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           autoResult = null;
         }
         if (autoResult) {
-          conversationHistory = autoResult.history;
+          if (Array.isArray(autoResult.history)) conversationHistory = autoResult.history;
           if (autoResult.languageState !== undefined) languageState = autoResult.languageState;
           if (autoResult.currentAgent   !== undefined) currentAgent   = autoResult.currentAgent;
           if (autoResult.pendingSlots   && autoResult.pendingSlots.length)  { pendingSlots  = autoResult.pendingSlots; offeredSlots = accumulateOffered(offeredSlots, autoResult.pendingSlots); }
