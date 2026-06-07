@@ -17,7 +17,7 @@ General settings (all three):
 | `appointment_reminder` | **Quick reply** — `Confirmar` / `Confirm` | **Call phone number** — `Reagendar` / `Reschedule` → clinic phone |
 | `review_requests` | *(none)* | — |
 | `review_followup` | *(none)* | — |
-| `recare_reminder` | **Quick reply** — `Marcar` / `Book` | — |
+| `recare_reminders` | **Quick reply** — `Marcar` / `Book` | — |
 
 ---
 
@@ -122,7 +122,7 @@ Warm wishes, the {{2}} team 💙
 
 ---
 
-## 3. `recare_reminder`  (Utility — ⚠️ may be classed as Marketing)
+## 3. `recare_reminders`  (Utility — ⚠️ may be classed as Marketing)
 Variables: `{{1}}` first name · `{{2}}` clinic · button: Quick reply `Marcar`/`Book`
 > Also reused for **reactivation** (dormant patients) unless `WHATSAPP_TEMPLATE_REACTIVATION` is set.
 
