@@ -44,16 +44,20 @@ Turn on the additive layer: WhatsApp reminders → confirmations → outbound co
 
 ---
 
-## EPIC 2 — Finish the Owner Dashboard ⬜
+## EPIC 2 — Ultimate Owner Dashboard ⬜
 
-The dashboard v1 is already built ([vicki-ai/src/dashboard/index.js](../../vicki-ai/src/dashboard/index.js)): reminders, confirmations (WhatsApp vs call), reviews, ratings, jobs. Round it out for the clinic owner.
+Full operational visibility into everything Vicki does — every message sent/received, confirmations, reviews, recare/reactivation, and voice-call outcomes. **Full spec: 📄 [dashboard-plan.md](dashboard-plan.md).** v1 already exists ([vicki-ai/src/dashboard/index.js](../../vicki-ai/src/dashboard/index.js), summary counts only).
 
 | # | Mini-task | Status |
 |---|-----------|--------|
-| 2.1 | Add **no-shows recovered** metric | ⬜ |
-| 2.2 | Add **recare / reactivation pipeline** metrics (due, sent, re-booked) | ⬜ |
-| 2.3 | Low-rating alert feed (recent <4★ with comments) | ⬜ |
-| 2.4 | Date-range filter (last 7 / 30 / 90 days) | ⬜ |
+| 2.0 | Auth + PHI hardening (login, phone masking, access log) — **gate before ship** | ⬜ |
+| 2.1 | Prereqs: link inbound messages to patient; store outbound snippet; indexes | ⬜ |
+| 2.2 | Overview KPIs (extend current stats) | ⬜ |
+| 2.3 | **Messages / Conversations** — live feed + per-patient thread (Vicki↔patient) | ⬜ |
+| 2.4 | Appointments & Confirmations table | ⬜ |
+| 2.5 | Reviews + Recare/Reactivation pipeline views | ⬜ |
+| 2.6 | Voice-calls view (from call_log.jsonl) | ⬜ |
+| 2.7 | Jobs/health, Patients search, CSV export, date-range filter, multi-clinic | ⬜ |
 
 ---
 

@@ -17,6 +17,10 @@ Plans are bucketed by status. **To re-sort, just move a file between the `todo/`
 | [fix-search-window-collapse.md](todo/fix-search-window-collapse.md) | 🔴 todo | Fix: slot search window collapses when patient exhausts the 28-day horizon. No matching commit found. |
 | [self-improving-sdr.md](todo/self-improving-sdr.md) | 🔴 todo | Foundational vision: self-improving AI SDR for PT dental clinics. Status unconfirmed. |
 
+## Key specs
+- [dashboard-plan.md](dashboard-plan.md) — the ultimate Owner Dashboard spec (EPIC 2).
+- [whatsapp-templates.md](whatsapp-templates.md) — the 4 WhatsApp templates to submit to Meta.
+
 ## Folders
 
 - `todo/` — future plans, not started
