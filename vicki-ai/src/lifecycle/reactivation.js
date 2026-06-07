@@ -84,9 +84,10 @@ async function handleReactivationJob(payload) {
   if (!clinic) return;
 
   const tmpl = reactivationTemplate(clinic);
+  const lang = require('../lang').pickLang(p.language, p.phone_e164);
   const sent = await wa.sendTemplate(clinic, p.phone_e164, tmpl, {
-    lang: p.language === 'en' ? 'en' : 'pt_PT',
-    bodyParams: [wa.firstName(p.name, p.language), clinic.name],
+    lang: lang === 'en' ? 'en' : 'pt_PT',
+    bodyParams: [wa.firstName(p.name, lang), clinic.name],
     buttons: [{ index: 0, payload: `recare_book:${p.id}` }],
   });
   if (sent) {

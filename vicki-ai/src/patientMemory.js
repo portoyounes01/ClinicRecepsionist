@@ -122,6 +122,23 @@ function updateAfterCall(patientId, {
   all[String(patientId)] = updated;
   saveAll(all);
   console.log(`[Memory] Saved patient ${patientId} — "${cleanSummary?.slice(0, 80)}"`);
+
+  // Additively teach the lifecycle engine this patient's spoken language so
+  // future WhatsApp/SMS use it (overrides the phone-number guess). UPDATE-only
+  // and fire-and-forget: never blocks or breaks the call if the DB is off or
+  // the patient has no lifecycle row yet.
+  if (language === 'en' || language === 'pt') {
+    try {
+      const db = require('./db');
+      if (db.isEnabled()) {
+        db.query(
+          `UPDATE patients SET language=$1, updated_at=now()
+             WHERE newsoft_patient_id=$2 AND language IS DISTINCT FROM $1`,
+          [language, String(patientId)]
+        ).catch(e => console.error('[Memory] lifecycle language sync failed:', e.message));
+      }
+    } catch (_) { /* lifecycle layer not present — ignore */ }
+  }
 }
 
 /**

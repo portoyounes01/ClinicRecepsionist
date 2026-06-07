@@ -79,11 +79,13 @@ async function handleReviewRequestJob(payload) {
 
   const link = reviewLink(clinic, review.token);
 
+  const lang = require('../lang').pickLang(review.language, review.phone_e164);
+
   // WhatsApp template (utility) with the review link as a body/URL param.
   if (!review.opt_out_whatsapp) {
     const sent = await wa.sendTemplate(clinic, review.phone_e164, clinic.whatsapp.templates.review, {
-      lang: review.language === 'en' ? 'en' : 'pt_PT',
-      bodyParams: [wa.firstName(review.name, review.language), clinic.name, link],
+      lang: lang === 'en' ? 'en' : 'pt_PT',
+      bodyParams: [wa.firstName(review.name, lang), clinic.name, link],
     });
     if (sent) {
       await db.query(
@@ -98,7 +100,7 @@ async function handleReviewRequestJob(payload) {
   if (!review.opt_out_sms && require('../sendGuard').isAllowed(review.phone_e164)) {
     try {
       const sms = require('../smsService');
-      const msg = review.language === 'en'
+      const msg = lang === 'en'
         ? `${clinic.name}: how was your visit? Leave a quick review: ${link}`
         : `${clinic.name}: como correu a sua visita? Deixe a sua opiniao: ${link}`;
       await sms.sendSMS(review.phone_e164, msg);
@@ -130,9 +132,10 @@ async function handleReviewNudgeJob(payload) {
 
   const link = reviewLink(clinic, review.token);
   if (!review.opt_out_whatsapp) {
+    const lang = require('../lang').pickLang(review.language, review.phone_e164);
     await wa.sendTemplate(clinic, review.phone_e164, clinic.whatsapp.templates.reviewNudge, {
-      lang: review.language === 'en' ? 'en' : 'pt_PT',
-      bodyParams: [wa.firstName(review.name, review.language), clinic.name, link],
+      lang: lang === 'en' ? 'en' : 'pt_PT',
+      bodyParams: [wa.firstName(review.name, lang), clinic.name, link],
     });
   }
   const newCount = review.nudge_count + 1;

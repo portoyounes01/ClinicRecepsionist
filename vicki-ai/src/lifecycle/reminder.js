@@ -187,15 +187,16 @@ async function handleReminderJob(payload) {
   const clinic = getClinic(tracked.clinic_id);
   if (!clinic) return;
 
+  const lang = require('../lang').pickLang(tracked.language, tracked.phone_e164);
   const when = new Date(tracked.appointment_at);
-  const locale = tracked.language === 'en' ? 'en-GB' : 'pt-PT';
+  const locale = lang === 'en' ? 'en-GB' : 'pt-PT';
   const dateStr = when.toLocaleDateString(locale, { weekday: 'long', day: '2-digit', month: 'long' });
   const timeStr = when.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false });
-  const fName = wa.firstName(tracked.name, tracked.language);
+  const fName = wa.firstName(tracked.name, lang);
   const addr = clinic.address || clinic.location || clinic.name; // never empty (Meta rejects empty vars)
 
   const sent = await wa.sendTemplate(clinic, tracked.phone_e164, clinic.whatsapp.templates.reminder, {
-    lang: tracked.language === 'en' ? 'en' : 'pt_PT',
+    lang: lang === 'en' ? 'en' : 'pt_PT',
     bodyParams: [fName, clinic.name, dateStr, timeStr, addr],
     // Button 0 = "Confirmar" (quick reply → confirms in Newsoft).
     // Button 1 in the template is a STATIC "Call phone number" CTA
@@ -277,7 +278,7 @@ function register() {
 
 module.exports = {
   trackAppointment, sweepDailyReminders, handleButton, register,
-  isEligibleStatus,
+  isEligibleStatus, upsertPatient,
   handleReminderJob, // exported for tests
   JOB_REMINDER, JOB_CONFIRM_CALL,
 };

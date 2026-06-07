@@ -71,11 +71,17 @@ async function placeConfirmCall(clinic, tracked) {
 async function smsConfirmFallback(clinic, tracked) {
   try {
     const sms = require('../smsService');
+    const lang = require('../lang').pickLang(tracked.language, tracked.phone_e164);
+    const locale = lang === 'en' ? 'en-GB' : 'pt-PT';
     const when = new Date(tracked.appointment_at);
-    const dateStr = when.toLocaleDateString('pt-PT');
-    const timeStr = when.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit', hour12: false });
-    const body = `${clinic.name}: lembrete da sua consulta em ${dateStr} as ${timeStr}. `
-      + `Por favor confirme respondendo SIM, ou ligue ${clinic.phone || clinic.mobile || ''} para remarcar.`;
+    const dateStr = when.toLocaleDateString(locale);
+    const timeStr = when.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false });
+    const phone = clinic.phone || clinic.mobile || '';
+    const body = lang === 'en'
+      ? `${clinic.name}: reminder of your appointment on ${dateStr} at ${timeStr}. `
+        + `Please reply YES to confirm, or call ${phone} to reschedule.`
+      : `${clinic.name}: lembrete da sua consulta em ${dateStr} as ${timeStr}. `
+        + `Por favor confirme respondendo SIM, ou ligue ${phone} para remarcar.`;
     await sms.sendSMS(tracked.phone_e164, body);
     console.log(`[ConfirmCall] SMS confirm fallback sent for appt ${tracked.newsoft_appointment_id}`);
   } catch (e) {

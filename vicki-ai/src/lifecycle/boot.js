@@ -52,7 +52,24 @@ async function bootLifecycle(app) {
   // every patient whose appointment is REMINDER_DAYS_AHEAD days out.
   scheduleDailyReminderSweep();
 
+  // Weekly Newsoft visit backfill so recare/reactivation know each patient's
+  // last visit. First run ~2 min after boot, then every 7 days.
+  scheduleWeeklyBackfill();
+
   console.log('[Lifecycle] Engine booted');
+}
+
+function scheduleWeeklyBackfill() {
+  const { allClinics } = require('../clinics/registry');
+  const { backfillVisits } = require('./backfill');
+  const run = async () => {
+    for (const clinic of allClinics()) {
+      try { await backfillVisits(clinic); }
+      catch (e) { console.error('[Backfill] weekly run error:', e.message); }
+    }
+  };
+  setTimeout(run, 120_000);                       // initial run shortly after boot
+  setInterval(run, 7 * 24 * 60 * 60 * 1000);      // then weekly
 }
 
 // Daily reminder batch at a fixed wall-clock time (clinic-local; set
