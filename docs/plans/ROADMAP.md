@@ -30,7 +30,8 @@ Turn on the additive layer: WhatsApp reminders → confirmations → outbound co
 |---|-----------|--------|-------|
 | 1.1 | Provision Railway Postgres, set `DATABASE_URL` (schema auto-applies on boot) | ✅ | **Done 2026-06-07** — Postgres already existed; wired `DATABASE_URL=${{Postgres.DATABASE_URL}}` on `ClinicRecepsionist`; dashboard reports `enabled:true`, tables migrated |
 | 1.2 | **WhatsApp number approval in Meta** | ⏳ | **Number submitted — waiting on Meta.** This is the gate. |
-| 1.3 | Verify Newsoft confirm endpoint + status codes (C/I/E meanings; remind only on blank status) | ⬜ | The #1 correctness risk — see plan "Open questions" |
+| 1.3 | Verify Newsoft confirm endpoint + status codes | ✅ | **Done 2026-06-07** — catalog fetched (see WORKLOG). Confirmed code=`C` (correct). Found bug: `confirmAppointment()` uses non-existent `/appointment/confirm` → must use `PUT /appointment/status-code`. Reminder filter skips first-time (`Z`) patients. |
+| 1.3a | **Apply** the confirm-endpoint fix + broaden reminder eligibility to include `Z` | ⬜ | Code fix in [newsoftApi.js](../../vicki-ai/src/newsoftApi.js#L242) + [reminder.js](../../vicki-ai/src/lifecycle/reminder.js); needed before go-live |
 | 1.4 | Approve 3 utility templates in Meta: `appointment_reminder`, `review_request`, `recare_reminder` | ⬜ | Submit early — Meta review takes days |
 | 1.5 | Set env: `WHATSAPP_*` creds, `PUBLIC_BASE_URL`, `GOOGLE_REVIEW_URL`, `DASHBOARD_KEY`, `TELNYX_APP_ID`, `TELNYX_OUTBOUND_NUMBER` | ⬜ | Full list in LIFECYCLE_SETUP.md. ⚠️ `DASHBOARD_KEY` still defaults to `vicki-dash` — set a real one (dashboard is currently public) |
 | 1.6 | Configure Meta webhook → `/whatsapp/webhook`, subscribe to `messages`, verify signature passes | ⬜ | Needs 1.2 done |
