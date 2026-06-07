@@ -226,7 +226,7 @@ function isFinalFarewell(text) {
     return false;
   }
 
-  return /\b(goodbye|bye|have a good day|have a nice day|take care|thank you for calling|thanks for calling|thank you|thanks|ate logo|ate ja|adeus|obrigado|obrigada|tenha um bom dia|tenha uma boa tarde|resto de bom dia|resto de boa tarde)\s*[.!]*$/.test(normalized);
+  return /\b(goodbye|bye|have a good day|have a nice day|see you soon|take care|thank you for calling|thanks for calling|thank you|thanks|ate logo|ate ja|ate breve|adeus|obrigado|obrigada|tenha um bom dia|tenha uma boa tarde|continuacao de um bom dia|continuacao de uma boa tarde|bom dia|boa tarde|boa noite|resto de bom dia|resto de boa tarde)\s*[.!]*$/.test(normalized);
 }
 
 async function speak(text, telnyxWs, onDone, getAbort, playbackControls = {}) {

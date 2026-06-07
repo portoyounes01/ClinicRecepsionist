@@ -1523,6 +1523,26 @@ function speakIn(languageState, pt, en) {
   return languageState === 'en' ? en : pt;
 }
 
+// Rotating farewell — Vicki varies her goodbye so it never sounds robotic.
+// Every variant clearly signals the call is ending; the caller then hears the
+// line and the call hangs up immediately (action:'hangup' path in callHandler).
+function goodbyePhrase(languageState) {
+  const pt = [
+    'Muito obrigada por ligar para o Instituto Vilas Boas. Até logo!',
+    'Obrigada por ligar para o Instituto Vilas Boas. Até breve!',
+    'Foi um prazer poder ajudar. Adeus e até breve!',
+    'Foi um prazer poder ajudar. Continuação de um bom dia!',
+  ];
+  const en = [
+    'Thank you for calling Instituto Vilas Boas. Goodbye!',
+    'Thanks for calling Instituto Vilas Boas. See you soon!',
+    'It was a pleasure helping you. Goodbye and see you soon!',
+    'It was a pleasure helping you. Have a great day!',
+  ];
+  const list = languageState === 'en' ? en : pt;
+  return list[Math.floor(Date.now() / 1000) % list.length];
+}
+
 // GLOBAL goodbye detection — runs for EVERY agent, not just the router.
 // Before this, goodbye was only checked when currentAgent === 'router', so a
 // caller saying "Adeus" after booking/cancelling (when they're in the booking
@@ -1670,7 +1690,7 @@ function deterministicRouterDecision(userText, languageState) {
       intent: 'goodbye',
       action: 'hangup',
       nextAgent: 'router',
-      speak: speakIn(languageState, 'Muito obrigada por ligar para o Instituto Vilas Boas. Vou desligar agora. Até logo!', 'Thank you for calling Instituto Vilas Boas. I will hang up the phone now. Goodbye!'),
+      speak: goodbyePhrase(languageState),
     };
   }
 
@@ -1853,9 +1873,7 @@ async function processTurn({
   // GLOBAL goodbye — runs for every agent so "Adeus" after a booking/cancel ends
   // the call with a farewell instead of looping the "não percebi" reprompt.
   if (detectGoodbye(userText)) {
-    const speak = speakIn(nextLanguageState,
-      'Muito obrigada por ligar para o Instituto Vilas Boas. Vou desligar agora. Até logo!',
-      'Thank you for calling Instituto Vilas Boas. I will hang up the phone now. Goodbye!');
+    const speak = goodbyePhrase(nextLanguageState);
     const parsed = { speak, action: 'hangup', intent: 'goodbye', params: {} };
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
     return finalize({ speak, action: 'hangup', history, currentAgent, unclearTurns: 0, bookingReasonText });
