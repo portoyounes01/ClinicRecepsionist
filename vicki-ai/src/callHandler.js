@@ -416,6 +416,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   // ── Smart endpointing state ───────────────────────────────────────────────
   let turnBuffer          = '';     // accumulates the caller's words across thinking pauses
   let endpointGraceTimer  = null;   // pending grace wait when a phrase sounds unfinished
+  let consecutiveReprompts = 0;     // back-to-back low-confidence "didn't catch that" count
+                                    // — breaks the "What?/Sorry?" feedback loop
 
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
@@ -729,10 +731,24 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       const candidate = turnBuffer.trim();
       if (!candidate) return;
 
-      // Low confidence + very short → ask to repeat (unchanged behavior).
+      // Low confidence + very short → ask to repeat.
       if (confidence < 0.55 && wordCount <= 4) {
-        console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat: "${candidate}"`);
         turnBuffer = '';
+        // Don't talk over ourselves: if Vicki is already speaking/processing,
+        // just drop this low-confidence fragment instead of stacking a reprompt
+        // on top (that overlap is what cut the audio).
+        if (isSpeaking || processingTurn) {
+          console.log(`[STT] Low confidence (${confidence.toFixed(2)}) ignored — already speaking: "${candidate}"`);
+          return;
+        }
+        // Break the "What?/Sorry?" feedback loop: after 2 reprompts in a row,
+        // stay silent and let the caller lead instead of re-prompting forever.
+        if (consecutiveReprompts >= 2) {
+          console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — ${consecutiveReprompts} reprompts already, staying silent: "${candidate}"`);
+          return;
+        }
+        consecutiveReprompts++;
+        console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat (#${consecutiveReprompts}): "${candidate}"`);
         isSpeaking = true;
         speakToCaller(languageState === 'en' ? 'Sorry, I didn\'t quite catch that. Could you repeat, please?' : 'Desculpe, não percebi bem. Pode repetir, por favor?', () => { isSpeaking = false; currentAbort = null; });
         return;
@@ -756,7 +772,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           turnBuffer = ''; pendingTranscript = ''; lastInterimText = '';
           if (!finalText) return;
           console.log(`[STT] Grace elapsed → AI Processing: "${finalText}"`);
-          runTurn(finalText);
+          consecutiveReprompts = 0; // understood a real turn — reset the reprompt streak
+          runTurn(finalText).catch(e => console.error('[Turn] runTurn failed:', e?.stack || e));
         }, graceMs);
         return;
       }
@@ -765,7 +782,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       clearTimeout(endpointGraceTimer); endpointGraceTimer = null;
       turnBuffer = '';
       console.log(`[STT] ENDPOINT DETECTED → AI Processing: "${candidate}"`);
-      runTurn(candidate);
+      consecutiveReprompts = 0; // understood a real turn — reset the reprompt streak
+      runTurn(candidate).catch(e => console.error('[Turn] runTurn failed:', e?.stack || e));
     }
   }  // end handleSonioxMessage
 
@@ -778,8 +796,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
       const speakNow = (text, onDone) => speakToCaller(text, onDone);
 
+      // Hoisted so the catch block can check them (avoid overlapping audio on error).
+      let speakStarted  = false;
+      let patienceTimer = null;
+      let patienceFired = false;
+
     try {
-      let speakStarted    = false;
       let bridgeDone      = null;
       const bridgePromise = new Promise(r => { bridgeDone = r; });
 
@@ -806,10 +828,11 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       const PATIENCE_FILLERS = languageState === 'en'
         ? ["Just one moment...", "Almost there...", "One second..."]
         : ["Só mais um momento...", "Já está quase...", "Quase pronto..."];
-      let patienceTimer = null;
-      let patienceFired = false;
       patienceTimer = setTimeout(() => {
-        if (!patienceFired && isSpeaking) {
+        // Only fill dead air if the turn is STILL processing AND no real line has
+        // started speaking yet. Firing on top of a bridge/early-speak/reprompt is
+        // what made Vicki talk over herself and cut the audio.
+        if (!patienceFired && processingTurn && !speakStarted) {
           patienceFired = true;
           const filler = PATIENCE_FILLERS[Math.floor(Date.now() / 1000) % PATIENCE_FILLERS.length];
           console.log(`[TTS] Patience filler: "${filler}"`);
@@ -1141,8 +1164,13 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       processingTurn = false;
     } catch (err) {
       console.error('[AI] Error:', err.message, err.stack);
+      try { clearTimeout(patienceTimer); } catch (_) {} // don't let the filler fire after an error
       processingTurn = false;
-      await speakNow(languageState === 'en' ? 'Sorry, I didn\'t quite catch that — could you repeat?' : 'Desculpe, não percebi bem — pode repetir?', () => { isSpeaking = false; currentAbort = null; });
+      // Only speak the error reprompt if nothing else already spoke this turn
+      // (a bridge/early-speak/filler) — avoids overlapping audio that cuts out.
+      if (!speakStarted && !patienceFired) {
+        await speakNow(languageState === 'en' ? 'Sorry, I didn\'t quite catch that — could you repeat?' : 'Desculpe, não percebi bem — importa-se de repetir?', () => { isSpeaking = false; currentAbort = null; });
+      }
       isSpeaking = false;
     }
   }  // end runTurn
