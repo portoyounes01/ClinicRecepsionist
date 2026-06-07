@@ -1077,6 +1077,13 @@ async function executeAction(action, params, patient, callerNumber, history = []
       if (specialtyDocs.length && medicId == null) {
         const allow = new Set(specialtyDocs);
         const filtered = pool.filter(s => allow.has(s.medicId));
+        // Sort by specialty PRIORITY (index in specialtyDocs), then by time, so every
+        // downstream pick — including the pool[0] fallback — favors the priority doctor
+        // (e.g. cleaning: Nadine→Beatriz→Hermes). Same-doctor slots stay time-ordered.
+        const rank = id => { const i = specialtyDocs.indexOf(id); return i === -1 ? 999 : i; };
+        filtered.sort((a, b) =>
+          rank(a.medicId) - rank(b.medicId) ||
+          String(a.appointmentDateBegin || '').localeCompare(String(b.appointmentDateBegin || '')));
         console.log(`[Specialty] "${specialtyId}" pool filter: ${pool.length} → ${filtered.length} (docs ${JSON.stringify(specialtyDocs)})`);
         pool = filtered;
         if (!pool.length) return { slots: [], searchDirection, dateFrom, dateTo, medicSpecified: false, exact: !!(pref && pref.exact), urgent: isUrgent, specialtyId, noSpecialtySlots: true };
@@ -1189,8 +1196,17 @@ async function executeAction(action, params, patient, callerNumber, history = []
 
         let chosen = [];
 
+        // Iterate doctors in SPECIALTY PRIORITY order, not Object.values order.
+        // byDoc is keyed by numeric medicId, and JS reorders numeric keys
+        // ascending — so Object.values gave 11(Hermes) before 13(Nadine)/36(Beatriz),
+        // which is why cleanings always landed on Hermes. specialtyDocs holds the
+        // intended order, e.g. cleaning = [13, 36, 11] (Nadine, Beatriz, Hermes-backup).
+        const orderedDocs = (specialtyDocs && specialtyDocs.length)
+          ? specialtyDocs.map(id => byDoc[id]).filter(Boolean)
+          : Object.values(byDoc);
+
         // Pass 1: prefer doctor with both morning AND afternoon
-        for (const doc of Object.values(byDoc)) {
+        for (const doc of orderedDocs) {
           if (doc.morning.length && doc.afternoon.length) {
             chosen = [doc.morning[0], doc.afternoon[0]];
             break;
@@ -1199,7 +1215,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
 
         // Pass 2: doctor with 2 morning slots
         if (!chosen.length) {
-          for (const doc of Object.values(byDoc)) {
+          for (const doc of orderedDocs) {
             if (doc.morning.length >= 2) {
               chosen = doc.morning.slice(0, 2);
               break;
@@ -1209,7 +1225,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
 
         // Pass 3: doctor with 2 afternoon slots
         if (!chosen.length) {
-          for (const doc of Object.values(byDoc)) {
+          for (const doc of orderedDocs) {
             if (doc.afternoon.length >= 2) {
               chosen = doc.afternoon.slice(0, 2);
               break;
@@ -1219,7 +1235,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
 
         // Pass 4: any doctor with at least 1 slot (single option)
         if (!chosen.length) {
-          for (const doc of Object.values(byDoc)) {
+          for (const doc of orderedDocs) {
             const any = [...doc.morning, ...doc.afternoon];
             if (any.length) { chosen = [any[0]]; break; }
           }
@@ -1510,6 +1526,13 @@ function speakIn(languageState, pt, en) {
 function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
   const text = normalizeForIntent(userText);
   if (!text || userText === '[continua]') return null;
+
+  // BOOKING-INTENT GUARD: if the caller wants to BOOK/cancel/schedule (not just
+  // ask "what do you do?"), bail out so the router sends this to the booking flow.
+  // Without this, a word like "implantes" matched the services FAQ below and the
+  // caller got the generic services list on every turn (infinite loop).
+  const wantsAction = /\b(marcar|marque|agendar|agende|marca[cç][aã]o|remarcar|desmarcar|cancelar|quero|queria|gostaria|preciso|consulta com|com a dra|com o dr|com a doutora|com o doutor|disponibilidade|vaga|vagas|book|schedule|appointment|i want|i'd like|i would like|cancel|reschedule)\b/.test(text);
+  if (wantsAction) return null;
 
   const info = {
     name:     clinicInfo.name     || 'Instituto Vilas Boas',
@@ -2221,7 +2244,7 @@ async function processTurn({
     }
   }
 
-  console.log(`[Agent:${currentAgent}] intent="${intent}" action="${action}" speak="${speak?.slice(0, 60)}..."`);
+  console.log(`[Agent:${currentAgent}] intent="${intent || currentAgent}" action="${action}" speak="${speak?.slice(0, 60)}..."`);
 
   // ── 1. ROUTER / HUMAN: classify intent and switch to specialist ───
   // Runs for 'router' AND 'human' — so if human transfer happens but
