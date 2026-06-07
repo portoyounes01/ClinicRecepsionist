@@ -532,9 +532,22 @@ function isExplicitBookingConfirmation(text) {
     .trim();
 
   if (!normalized) return false;
+  // A reply that starts with "não"/"no" is never a confirmation, even if it
+  // contains "confirmo" later (e.g. "não, não confirmo").
+  if (/^(nao|no|nope)\b/.test(normalized)) return false;
 
-  return /(?:^|[\s"'(])(?:i confirm to book this appointment|i confirm this appointment|confirm this appointment|confirm the appointment|confirm this booking|confirmo para marcar esta consulta|confirmo esta consulta|confirmo a marcacao|confirmo esta marcacao)(?:[.!?'" )]|$)/i
-    .test(normalized);
+  // Accept NATURAL confirmations — the slot was already offered with "posso marcar
+  // para si?", so a plain "confirmo" / "sim, pode marcar" / "quero marcar" / "yes,
+  // go ahead" is a clear yes. (Previously this demanded a near-exact phrase, so
+  // "Confirmo." alone failed and Vicki recited an English sentence — confusing.)
+  return /\b(confirmo|confirmar|confirmado)\b/.test(normalized)
+    || /\b(pode|podes)\s+(marcar|agendar|avancar)\b/.test(normalized)
+    || /\b(quero|queria)\s+(marcar|agendar|essa|esse|essa consulta|esse horario)\b/.test(normalized)
+    || /\b(marque|marca)\s+(por favor|essa|esse|isso|sim)?\b/.test(normalized)
+    || /\b(avance|avanca|pode avancar|esta bem pode|pode ser)\b/.test(normalized)
+    || /\b(sim,?\s+(confirmo|por favor|pode marcar|quero|marque|esta bem|claro))\b/.test(normalized)
+    || /\b(i confirm|go ahead|book it|please book|yes,?\s+(book|please|go ahead|confirm))\b/.test(normalized)
+    || /(?:^|[\s"'(])(?:i confirm to book this appointment|confirm this appointment|confirm the appointment|confirm this booking)(?:[.!?'" )]|$)/i.test(normalized);
 }
 
 function lastAssistantSpeak(history) {
@@ -605,10 +618,10 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
 
   if (action === 'book_appointment' && pendingSlots?.length) {
     if (!explicitBookingConfirmation) {
-      console.warn('[Guard] book_appointment blocked â€” missing explicit confirmation phrase.');
+      console.warn('[Guard] book_appointment blocked — confirm naturally first.');
       return {
         action: 'none',
-        speak: 'Antes de marcar, diga: "I confirm to book this appointment."',
+        speak: bookingConfirmPrompt(pendingSlots, userText, 'pt'),
         params,
       };
     }
@@ -1613,6 +1626,32 @@ function appointmentDetailAnswer(userText, pendingSlots = [], lang = 'pt') {
     : `Ofereci ${list}. Qual prefere?`;
 }
 
+// Pick the slot the caller is referring to (ordinal / time), else the first.
+function pickChosenSlot(slots, userText) {
+  if (!slots || !slots.length) return null;
+  if (slots.length === 1) return slots[0];
+  const t = normalizeForIntent(userText);
+  if (/\b(primeir|first|o das|a das)\b/.test(t)) return slots[0];
+  if (/\b(segund|second|outr[oa])\b/.test(t)) return slots[1];
+  for (const s of slots) { const hh = (s.time || '').slice(0, 2); if (hh && t.includes(hh)) return s; }
+  return slots[0];
+}
+
+// Natural booking confirmation that NAMES the chosen slot — so the caller just
+// says "sim" instead of reciting a phrase. Replaces the old English recitation
+// 'Antes de marcar, diga: "I confirm to book this appointment."'.
+function bookingConfirmPrompt(pendingSlots, userText, lang) {
+  const s = pickChosenSlot(pendingSlots, userText);
+  const en = lang === 'en';
+  if (!s) return en ? 'Shall I go ahead and book this appointment for you?' : 'Quer que avance com a marcação?';
+  const desc = en
+    ? `${s.displayDate} at ${s.displayTime} with ${s.medicName}`
+    : `${s.displayDate} às ${s.displayTime} da ${s.period} com ${s.medicName}`;
+  return en
+    ? `Just to confirm — shall I book your appointment for ${desc}?`
+    : `Então quer que marque a consulta de ${desc}?`;
+}
+
 function clinicInfoAnswer(userText, languageState, clinicInfo = {}, pendingSlots = []) {
   const text = normalizeForIntent(userText);
   if (!text || userText === '[continua]') return null;
@@ -2282,21 +2321,36 @@ async function processTurn({
     patient?.patientId &&
     (action === 'none' || action === 'hangup' || action === 'book_appointment')
   ) {
-    const explicitBookingConfirmation = isExplicitBookingConfirmation(userText) || isExplicitBookingConfirmation(speak);
-    if (!explicitBookingConfirmation) {
-      console.warn('[Guard] booking confirmation required ? blocking auto-book until explicit phrase is spoken.');
-      // MUST return history (via finalize) — omitting it set conversationHistory to
-      // undefined in callHandler and crashed the NEXT turn at the history trim,
-      // which swallowed goodbyes ("Bye") into an error-reprompt loop.
+    // The patient does NOT have to recite a phrase. A plain "sim" right after Vicki
+    // asks "quer que marque…?" counts, as do natural confirms (confirmo / pode marcar).
+    const prevSpeak   = lastAssistantSpeak(history);
+    const askedToBook = /quer que (eu )?marque|posso marcar|book your appointment|shall i book|confirma que quer marcar/i.test(prevSpeak || '');
+    const plainYes    = /^(sim|claro|certo|exato|isso|pode|pode ser|por favor|okay|ok|yes|yeah|yep|sure)\b/.test(normalizeForIntent(userText));
+    const confirmed   = isExplicitBookingConfirmation(userText) || isExplicitBookingConfirmation(speak) || (askedToBook && plainYes);
+    const rejected    = /\?/.test(userText || '') || /^(nao|no|nope)\b/.test(normalizeForIntent(userText)) ||
+                        /\b(outro|outra|another|other|mais tarde|later|cancel|espera|wait|mud[ae])\b/.test(normalizeForIntent(userText));
+
+    if (!confirmed) {
+      if (rejected) {
+        // Declined this slot / asked something — never book; let the turn's own
+        // response (re-offer or answer) stand. The false-claim guard in callHandler
+        // protects against any "está marcado" slip.
+        console.warn('[Guard] not a confirmation (rejection/question) — not booking.');
+        return finalize({ action: 'none', speak, params, history, currentAgent, unclearTurns: 0, bookingReasonText: updatedBookingReasonText });
+      }
+      // Chose a slot / unclear → CONFIRM NATURALLY, naming the slot. A "sim" then books.
+      console.warn('[Guard] asking natural booking confirmation (naming the slot).');
       return finalize({
         action: 'none',
-        speak: 'Antes de marcar, diga: "I confirm to book this appointment."',
+        speak: bookingConfirmPrompt(pendingSlots, userText, nextLanguageState),
         params,
         history,
-        currentAgent,
+        currentAgent: 'booking',
+        unclearTurns: 0,
         bookingReasonText: updatedBookingReasonText,
       });
     }
+    // confirmed → fall through to the FORCE-book guard below, which books.
   }
 
   // If pendingSlots + known patient + patient confirmed → MUST book before anything else.
