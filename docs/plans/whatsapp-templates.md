@@ -16,7 +16,7 @@ General settings (all three):
 |---|---|---|
 | `appointment_reminder` | **Quick reply** — `Confirmar` / `Confirm` | **Call phone number** — `Reagendar` / `Reschedule` → clinic phone |
 | `review_request` | *(none)* | — |
-| `review_reminder` | *(none)* | — |
+| `review_followup` | *(none)* | — |
 | `recare_reminder` | **Quick reply** — `Marcar` / `Book` | — |
 
 ---
@@ -94,7 +94,7 @@ Thank you so much! 💙
 
 ---
 
-## 2b. `review_reminder`  (Utility) — the review follow-up
+## 2b. `review_followup`  (Utility) — the review follow-up
 Sent as the 2 review nudges (next-day + 1 week) if the patient hasn't reviewed yet. Softer than the first ask.
 Variables: `{{1}}` first name · `{{2}}` clinic · `{{3}}` review link · no buttons
 

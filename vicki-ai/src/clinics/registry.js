@@ -55,7 +55,7 @@ function buildLouleClinic() {
       templates: {
         reminder:    process.env.WHATSAPP_TEMPLATE_REMINDER     || 'appointment_reminder',
         review:      process.env.WHATSAPP_TEMPLATE_REVIEW        || 'review_request',
-        reviewNudge: process.env.WHATSAPP_TEMPLATE_REVIEW_NUDGE  || 'review_reminder',
+        reviewNudge: process.env.WHATSAPP_TEMPLATE_REVIEW_NUDGE  || 'review_followup',
         recare:      process.env.WHATSAPP_TEMPLATE_RECARE        || 'recare_reminder',
       },
     },
