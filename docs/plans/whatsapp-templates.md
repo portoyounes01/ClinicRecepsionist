@@ -67,26 +67,26 @@ Variables: `{{1}}` first name · `{{2}}` clinic · `{{3}}` review link · no but
 
 **Portuguese (pt_PT):**
 ```
-Olá *{{1}}*,
+Olá *{{1}}*! 😊
 
-Obrigada pela sua visita — {{2}}! 🦷
+Foi um prazer cuidar de si — {{2}}! Esperamos que tenha saído com um sorriso ainda mais bonito. 🦷
 
-A sua opinião é muito importante para nós. Pode partilhá-la aqui (demora menos de 1 minuto):
-{{3}}
+A sua opinião ajuda outras pessoas a escolher o seu cuidado dentário com confiança — e significa muito para a nossa equipa. Demora menos de 1 minuto:
+👉 {{3}}
 
-Estamos aqui para ajudar a manter o seu *sorriso com confiança!*
+Muito obrigada! 💙
 ```
 
 **English (en):**
 ```
-Hello *{{1}}*,
+Hi *{{1}}*! 😊
 
-Thank you for visiting {{2}}! 🦷
+It was a pleasure taking care of you — {{2}}! We hope you left with an even brighter smile. 🦷
 
-Your feedback means a lot to us. You can share it here (less than a minute):
-{{3}}
+Your feedback helps others choose their dental care with confidence — and it means a lot to our team. It takes less than a minute:
+👉 {{3}}
 
-We're here to help keep your *smile confident!*
+Thank you so much! 💙
 ```
 
 **Samples:** {{1}}=`Valter` · {{2}}=`Instituto Vilas Boas` · {{3}}=`https://<your-host>/review/ab12cd34`
