@@ -9,9 +9,11 @@
 //      Cancel  tap  -> Newsoft cancelAppointment  + mark cancelled.
 //   4. No reply by ~24h before -> schedule an outbound confirm CALL.
 //
-// ⚠️ ELIGIBILITY: we remind ONLY when appointmentStatusCode is blank.
-//    Any non-empty code (C/I/E/...) means cancelled / not-coming /
-//    doctor-cancelled — never remind or confirm those.
+// ⚠️ ELIGIBILITY: remind only for still-pending appointments — blank status
+//    ("" = not yet confirmed) or "Z" (1.ª Vez = first-time patient). Every
+//    other live code is skipped: C confirmed, E/M cancelled, D/F withdrawn/
+//    no-show, P/N/R/S arrived/in-consult/done/sms. (Verified 2026-06-07 vs
+//    the live Newsoft status-code catalog — see docs/plans/WORKLOG.md.)
 // ============================================================
 
 const db        = require('../db');
@@ -22,9 +24,16 @@ const newsoft   = require('../newsoftApi');
 const JOB_REMINDER     = 'reminder_whatsapp';
 const JOB_CONFIRM_CALL = 'confirm_call';
 
-/** An appointment status is eligible for a reminder only when it is blank. */
+/**
+ * Eligible for a reminder when the appointment is still pending: blank status
+ * ("" = not yet confirmed) or "Z" = 1.ª Vez (first-time patient). All other
+ * codes (C/E/M/D/F/P/N/R/S/U...) are skipped.
+ */
+const REMINDABLE_STATUSES = new Set(['', 'Z']);
 function isEligibleStatus(statusCode) {
-  return statusCode === null || statusCode === undefined || String(statusCode).trim() === '';
+  const code = (statusCode === null || statusCode === undefined)
+    ? '' : String(statusCode).trim().toUpperCase();
+  return REMINDABLE_STATUSES.has(code);
 }
 
 // ─── Upsert helpers ────────────────────────────────────────────────────────────

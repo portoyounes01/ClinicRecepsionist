@@ -8,19 +8,23 @@
 - **Live engine:** ✅ ON in production. Postgres connected, tables migrated, scheduler running. Dashboard `/dashboard/api/stats` returns `enabled:true`. Nothing reaches patients yet (no WhatsApp creds + empty tables) → safe.
 - **Blocked on:** Meta approving the WhatsApp number (task 1.2) — user already submitted it.
 - **Known fixes needed before go-live:**
-  1. `confirmAppointment()` calls a non-existent endpoint — must switch to `PUT /appointment/status-code` (see 2026-06-07 entry).
-  2. Reminder eligibility skips first-time (`Z`) patients — should include them.
-  3. `DASHBOARD_KEY` still default `vicki-dash` (dashboard public) — set with the rest of the env vars in task 1.5.
+  1. ✅ FIXED (1.3a, committed not pushed) — `confirmAppointment()` now uses `PUT /appointment/status-code`; reminder eligibility now allows blank + `Z`.
+  2. `DASHBOARD_KEY` still default `vicki-dash` (dashboard public) — set with the rest of the env vars in task 1.5.
+  3. ⏳ Unpushed commits: the 1.3a code fix is committed locally but **not pushed** — push will redeploy the live phone line, so batch it with the task 1.5 env-var redeploy.
 
 ## ⏭️ NEXT ACTIONS
 
-1. **Apply the confirm fix** (1.3 follow-up): change [confirmAppointment()](../../vicki-ai/src/newsoftApi.js#L242) to `PUT /appointment/status-code` with `appointmentStatusCode:"C"`; broaden reminder eligibility to include `Z`.
-2. **Submit the 3 WhatsApp templates** to Meta (task 1.4) — review takes days, start early.
-3. When Meta approves the number → set `WHATSAPP_*` + remaining env vars in one redeploy (task 1.5), then run the E2E tests (1.6–1.9).
+1. **Submit the 3 WhatsApp templates** to Meta (task 1.4) — review takes days, start early.
+2. When Meta approves the number → set `WHATSAPP_*` + remaining env vars + a real `DASHBOARD_KEY`, **push the 1.3a fix in the same redeploy** (task 1.5), then run the E2E tests (1.6–1.9).
 
 ---
 
 ## LOG
+
+### 2026-06-07 — Task 1.3a done (applied the confirm fix + Z eligibility)
+- [newsoftApi.js](../../vicki-ai/src/newsoftApi.js#L242) `confirmAppointment()`: `POST /appointment/confirm` → `PUT /appointment/status-code`, body `{clinicNif, clinicId, costCenterId, appointmentId, appointmentStatusCode:"C", observation}`.
+- [reminder.js](../../vicki-ai/src/lifecycle/reminder.js) `isEligibleStatus()`: now allows `""` and `Z` (first-time) via `REMINDABLE_STATUSES`.
+- Both syntax-checked (`node -c`). Committed locally; **push deferred** to batch with the 1.5 env redeploy (avoids an extra live-line restart). Fix is dormant until WhatsApp goes live anyway.
 
 ### 2026-06-07 — Task 1.3 verified (Newsoft confirm endpoint + status codes)
 Ran a read-only diagnostic ([scripts/check-status-codes.js](../../vicki-ai/scripts/check-status-codes.js)) against live Newsoft `GET /appointments/status-code`.

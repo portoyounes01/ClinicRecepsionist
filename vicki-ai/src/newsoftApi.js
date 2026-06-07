@@ -234,21 +234,24 @@ async function bookAppointment({ patientId, slotBase64, motiveName, observation 
 // ADDITIVE — used only by the lifecycle engine (WhatsApp/voice confirm).
 // Does not change any existing behavior above.
 //
-// TODO: verify the exact Newsoft endpoint + status code that marks an
-// appointment "confirmed" against live data before deploying. The
-// confirmed code is configurable via NEWSOFT_CONFIRMED_STATUS_CODE
-// (default 'C') so it can be corrected without a code change.
+// Verified 2026-06-07 against the live Newsoft status-code catalog
+// (GET /appointments/status-code): the "confirmed" code is "C" = "Confirmada".
+// The standard status-update endpoint is PUT /appointment/status-code with a
+// string appointmentStatusCode (the old POST /appointment/confirm does not
+// exist). Code stays configurable via NEWSOFT_CONFIRMED_STATUS_CODE.
 // ─────────────────────────────────────────────
 async function confirmAppointment({ appointmentId, channel }) {
   const token = await cache.getToken();
   const statusCode = process.env.NEWSOFT_CONFIRMED_STATUS_CODE || 'C';
-  const res = await axios.post(
-    `${BASE_URL}/appointment/confirm`,
+  const res = await axios.put(
+    `${BASE_URL}/appointment/status-code`,
     {
-      ...clinicParams(),
-      AppointmentId:          appointmentId,
-      appointmentStatusCode:  statusCode,
-      AppointmentObservation: `Confirmada pelo paciente via Vicki (${channel || 'whatsapp'})`,
+      clinicNif:             CLINIC_NIF,
+      clinicId:              CLINIC_ID,
+      costCenterId:          COST_CENTER_ID,
+      appointmentId,
+      appointmentStatusCode: statusCode,
+      observation:           `Confirmada pelo paciente via Vicki (${channel || 'whatsapp'})`,
     },
     { headers: authHeader(token) }
   );
