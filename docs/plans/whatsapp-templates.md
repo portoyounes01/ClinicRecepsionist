@@ -21,7 +21,7 @@ General settings (all three):
 ---
 
 ## 1. `appointment_reminder`  (Utility)
-Variables: `{{1}}` first name · `{{2}}` clinic · `{{3}}` date (weekday + day + month) · `{{4}}` time
+Variables: `{{1}}` first name · `{{2}}` clinic · `{{3}}` date (weekday + day + month) · `{{4}}` time · `{{5}}` address
 
 **Portuguese (pt_PT):**
 ```
@@ -31,6 +31,7 @@ Este é um lembrete de *48 horas* da sua consulta na {{2}}:
 
 📅 Data: *{{3}}*
 🕐 Hora: *{{4}}*
+📍 Local: {{5}}
 
 Para confirmar, toque em *Confirmar*. Para reagendar ou cancelar, toque em *Reagendar* para falar com a nossa equipa.
 
@@ -47,6 +48,7 @@ This is a *48-hour* reminder of your appointment at {{2}}:
 
 📅 Date: *{{3}}*
 🕐 Time: *{{4}}*
+📍 Location: {{5}}
 
 To confirm, tap *Confirm*. To reschedule or cancel, tap *Reschedule* to talk to our team.
 
@@ -56,7 +58,7 @@ We're here to help keep your *smile confident!* 🦷
 ```
 
 **Buttons:** 1) Quick reply `Confirmar`/`Confirm`  2) Call phone number `Reagendar`/`Reschedule` → clinic phone (E.164).
-**Samples:** {{1}}=`Valter` · {{2}}=`Instituto Vilas Boas` · {{3}}=`quarta-feira, 08 de junho` · {{4}}=`15:30`
+**Samples:** {{1}}=`Valter` · {{2}}=`Instituto Vilas Boas` · {{3}}=`quarta-feira, 08 de junho` · {{4}}=`15:30` · {{5}}=`Avenida 25 de Abril, 8100-508 Loulé, Algarve`
 
 ---
 

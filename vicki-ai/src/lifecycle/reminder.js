@@ -192,10 +192,11 @@ async function handleReminderJob(payload) {
   const dateStr = when.toLocaleDateString(locale, { weekday: 'long', day: '2-digit', month: 'long' });
   const timeStr = when.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false });
   const fName = wa.firstName(tracked.name, tracked.language);
+  const addr = clinic.address || clinic.location || clinic.name; // never empty (Meta rejects empty vars)
 
   const sent = await wa.sendTemplate(clinic, tracked.phone_e164, clinic.whatsapp.templates.reminder, {
     lang: tracked.language === 'en' ? 'en' : 'pt_PT',
-    bodyParams: [fName, clinic.name, dateStr, timeStr],
+    bodyParams: [fName, clinic.name, dateStr, timeStr, addr],
     // Button 0 = "Confirmar" (quick reply → confirms in Newsoft).
     // Button 1 in the template is a STATIC "Call phone number" CTA
     // (Remarcar/Cancelar → dials the clinic so a human handles it), which
