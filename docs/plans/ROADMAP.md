@@ -12,7 +12,7 @@ This is the single source of truth. Big blocks (EPICS) are ordered top to bottom
 
 The WhatsApp number is submitted to Meta and **pending approval** (Epic 1, task 2). That blocks *sending* WhatsApp, but **none of these** — knock them out in parallel:
 
-- **1.1** Provision Railway Postgres → set `DATABASE_URL`
+- ~~**1.1** Provision Railway Postgres → set `DATABASE_URL`~~ ✅ **done 2026-06-07**
 - **1.3** Verify the Newsoft confirm endpoint + status-code meanings
 - **1.4** Draft & submit the 3 WhatsApp templates to Meta for review (approval also takes days)
 - **1.5** Set the remaining env vars (`PUBLIC_BASE_URL`, `GOOGLE_REVIEW_URL`, `DASHBOARD_KEY`, Telnyx outbound)
@@ -28,11 +28,11 @@ Turn on the additive layer: WhatsApp reminders → confirmations → outbound co
 
 | # | Mini-task | Status | Notes |
 |---|-----------|--------|-------|
-| 1.1 | Provision Railway Postgres, set `DATABASE_URL` (schema auto-applies on boot) | ⬜ | Engine self-disables until this is set |
+| 1.1 | Provision Railway Postgres, set `DATABASE_URL` (schema auto-applies on boot) | ✅ | **Done 2026-06-07** — Postgres already existed; wired `DATABASE_URL=${{Postgres.DATABASE_URL}}` on `ClinicRecepsionist`; dashboard reports `enabled:true`, tables migrated |
 | 1.2 | **WhatsApp number approval in Meta** | ⏳ | **Number submitted — waiting on Meta.** This is the gate. |
 | 1.3 | Verify Newsoft confirm endpoint + status codes (C/I/E meanings; remind only on blank status) | ⬜ | The #1 correctness risk — see plan "Open questions" |
 | 1.4 | Approve 3 utility templates in Meta: `appointment_reminder`, `review_request`, `recare_reminder` | ⬜ | Submit early — Meta review takes days |
-| 1.5 | Set env: `WHATSAPP_*` creds, `PUBLIC_BASE_URL`, `GOOGLE_REVIEW_URL`, `DASHBOARD_KEY`, `TELNYX_APP_ID`, `TELNYX_OUTBOUND_NUMBER` | ⬜ | Full list in LIFECYCLE_SETUP.md |
+| 1.5 | Set env: `WHATSAPP_*` creds, `PUBLIC_BASE_URL`, `GOOGLE_REVIEW_URL`, `DASHBOARD_KEY`, `TELNYX_APP_ID`, `TELNYX_OUTBOUND_NUMBER` | ⬜ | Full list in LIFECYCLE_SETUP.md. ⚠️ `DASHBOARD_KEY` still defaults to `vicki-dash` — set a real one (dashboard is currently public) |
 | 1.6 | Configure Meta webhook → `/whatsapp/webhook`, subscribe to `messages`, verify signature passes | ⬜ | Needs 1.2 done |
 | 1.7 | E2E test: reminder → tap Confirm → Newsoft write-back; replay webhook → no double-write (idempotent) | ⬜ | Use Meta test number to your own WhatsApp |
 | 1.8 | E2E test: no reply → outbound confirm call (Telnyx) → write-back; SMS fallback if Telnyx unset | ⬜ | |
