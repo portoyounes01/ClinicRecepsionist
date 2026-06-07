@@ -95,7 +95,7 @@ async function handleReviewRequestJob(payload) {
   }
 
   // SMS fallback so it reaches non-WhatsApp users too.
-  if (!review.opt_out_sms) {
+  if (!review.opt_out_sms && require('../sendGuard').isAllowed(review.phone_e164)) {
     try {
       const sms = require('../smsService');
       const msg = review.language === 'en'

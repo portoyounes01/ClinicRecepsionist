@@ -102,6 +102,8 @@ async function handleConfirmCallJob(payload) {
   const clinic = getClinic(tracked.clinic_id);
   if (!clinic) return;
 
+  if (!require('../sendGuard').guard(tracked.phone_e164, 'confirm-call')) return;
+
   const result = await placeConfirmCall(clinic, tracked);
   if (!result) {
     if (!tracked.opt_out_sms) await smsConfirmFallback(clinic, tracked);

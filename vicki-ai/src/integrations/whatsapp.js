@@ -55,6 +55,7 @@ async function sendTemplate(clinic, to, templateName, opts = {}) {
 
   const waTo = toWaNumber(to);
   if (!waTo) { console.warn('[WA] No recipient — skipping template'); return null; }
+  if (!require('../sendGuard').isAllowed(waTo)) { console.log(`[WA] Skipped by test gate: ${templateName}`); return null; }
 
   if (process.env.VICKI_DRY_RUN) {
     console.log(`[WA] DRY_RUN — would send template "${templateName}" to ${waTo} (${buttons.length} buttons)`);
@@ -110,6 +111,7 @@ async function sendText(clinic, to, text) {
   const wa = clinic?.whatsapp || {};
   const waTo = toWaNumber(to);
   if (!waTo) return null;
+  if (!require('../sendGuard').isAllowed(waTo)) { console.log('[WA] Skipped text by test gate'); return null; }
 
   if (process.env.VICKI_DRY_RUN) {
     console.log(`[WA] DRY_RUN — would send text to ${waTo}`);
