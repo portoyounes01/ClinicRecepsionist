@@ -1566,6 +1566,53 @@ function detectGoodbye(userText) {
   return true;
 }
 
+// True when Vicki's LAST spoken line asked "anything else?" — used so a bare
+// "não"/"no" is treated as "end the call" ONLY in that moment (mid-booking a
+// "não" means "reject the slot", so this must be context-aware).
+function lastBotAskedAnythingElse(history = []) {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const m = history[i];
+    if (m.role !== 'assistant') continue;
+    let speak = '';
+    try { speak = (JSON.parse(m.content).speak || ''); } catch (_) { speak = m.content || ''; }
+    return /mais alguma coisa|anything else|ajudar em mais|help with anything else/i.test(speak);
+  }
+  return false;
+}
+
+// Closing/negative reply to "anything else?" — caller is done. Deliberately does
+// NOT match "sim" (after "anything else?", "sim" means they DO want more help).
+function isCloseDecline(userText) {
+  const text = normalizeForIntent(userText);
+  if (!text) return false;
+  return /^(nao|no|nope|nada|estou bem|estou servido|nao preciso|nao obrigad[ao]|mais nada|era (tudo|so isso)|so isso|foi tudo|that'?s all|no,? thanks?|nothing else|i'?m good|im good)\b/.test(text);
+}
+
+// During an active booking, answer "a que horas? / que dia? / com que médico?"
+// straight from the pending slot(s) — deterministic so the caller always hears
+// a clear time/date/doctor (callers often can't hear it the first time). The
+// pending slots can still be confirmed afterwards (we don't clear them).
+function appointmentDetailAnswer(userText, pendingSlots = [], lang = 'pt') {
+  if (!pendingSlots || !pendingSlots.length) return null;
+  const text = normalizeForIntent(userText);
+  const asksDetail = /\b(a que horas|que horas|quando|que dia|qual.*(dia|hora|medico|medica)|com que medico|com quem|which doctor|what time|what day|when is|what'?s the time)\b/.test(text);
+  if (!asksDetail) return null;
+  const en = lang === 'en';
+  const one = (s) => en
+    ? `${s.displayDate} at ${s.displayTime} with ${s.medicName}`
+    : `${s.displayDate} às ${s.displayTime} da ${s.period} com ${s.medicName}`;
+  if (pendingSlots.length === 1) {
+    const s = pendingSlots[0];
+    return en
+      ? `The appointment I offered is ${one(s)}. Shall I go ahead and book it?`
+      : `A consulta que ofereci é ${one(s)}. Quer que avance com a marcação?`;
+  }
+  const list = pendingSlots.slice(0, 2).map(one).join(en ? ', or ' : ', ou ');
+  return en
+    ? `I offered ${list}. Which would you prefer?`
+    : `Ofereci ${list}. Qual prefere?`;
+}
+
 function clinicInfoAnswer(userText, languageState, clinicInfo = {}, pendingSlots = []) {
   const text = normalizeForIntent(userText);
   if (!text || userText === '[continua]') return null;
@@ -1896,6 +1943,25 @@ async function processTurn({
     const parsed = { speak, action: 'hangup', intent: 'goodbye', params: {} };
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
     return finalize({ speak, action: 'hangup', history, currentAgent, unclearTurns: 0, bookingReasonText });
+  }
+
+  // END-OF-CALL: if Vicki just asked "mais alguma coisa?" and the caller declines
+  // (even a bare "não"), say a farewell and hang up. The !pendingSlots guard means
+  // a slot-rejection "não" during booking never ends the call.
+  if (!pendingSlots?.length && lastBotAskedAnythingElse(history) && isCloseDecline(userText)) {
+    const speak = goodbyePhrase(nextLanguageState);
+    const parsed = { speak, action: 'hangup', intent: 'goodbye', params: {} };
+    history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+    return finalize({ speak, action: 'hangup', history, currentAgent, unclearTurns: 0, bookingReasonText });
+  }
+
+  // During an active booking, answer "a que horas? / que dia? / com que médico?"
+  // deterministically from the pending slot — keep the slot so "sim" still books.
+  const apptDetail = appointmentDetailAnswer(userText, pendingSlots, nextLanguageState);
+  if (apptDetail) {
+    const parsed = { speak: apptDetail, action: 'none', intent: 'booking', params: {} };
+    history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+    return finalize({ speak: apptDetail, action: 'none', history, currentAgent: 'booking', unclearTurns: 0, bookingReasonText });
   }
 
   const directClinicInfo = clinicInfoAnswer(userText, nextLanguageState, clinicInfo, pendingSlots);
