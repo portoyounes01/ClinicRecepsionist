@@ -14,12 +14,17 @@
 
 ## ⏭️ NEXT ACTIONS
 
-1. **Submit the 3 WhatsApp templates** to Meta (task 1.4) — review takes days, start early.
-2. When Meta approves the number → set `WHATSAPP_*` + remaining env vars + a real `DASHBOARD_KEY`, **push the 1.3a fix in the same redeploy** (task 1.5), then run the E2E tests (1.6–1.9).
+1. **USER:** paste the 3 drafted templates ([whatsapp-templates.md](whatsapp-templates.md)) into Meta WhatsApp Manager for approval (review takes days).
+2. When Meta approves the number + templates → set `WHATSAPP_*` + remaining env vars + a real `DASHBOARD_KEY`, **push the unpushed commits in the same redeploy** (task 1.5), then run the E2E tests (1.6–1.9).
+
+> ⚠️ Nothing has been pushed to `main` yet — all commits below are local. The next push will redeploy the live phone line, so it's batched with task 1.5.
 
 ---
 
 ## LOG
+
+### 2026-06-07 — Task 1.4 drafted (WhatsApp templates)
+Wrote [whatsapp-templates.md](whatsapp-templates.md): `appointment_reminder` (vars clinic/date/time, buttons Confirmar/Cancelar), `review_request` (vars clinic/link, no buttons), `recare_reminder` (var clinic, button Marcar). pt-PT + EN, variable order matches the code exactly. Ready for the user to submit to Meta. Flagged that recare may be classed as Marketing.
 
 ### 2026-06-07 — Task 1.3a done (applied the confirm fix + Z eligibility)
 - [newsoftApi.js](../../vicki-ai/src/newsoftApi.js#L242) `confirmAppointment()`: `POST /appointment/confirm` → `PUT /appointment/status-code`, body `{clinicNif, clinicId, costCenterId, appointmentId, appointmentStatusCode:"C", observation}`.

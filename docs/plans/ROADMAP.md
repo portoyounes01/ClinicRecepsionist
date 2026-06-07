@@ -32,7 +32,7 @@ Turn on the additive layer: WhatsApp reminders → confirmations → outbound co
 | 1.2 | **WhatsApp number approval in Meta** | ⏳ | **Number submitted — waiting on Meta.** This is the gate. |
 | 1.3 | Verify Newsoft confirm endpoint + status codes | ✅ | **Done 2026-06-07** — catalog fetched (see WORKLOG). Confirmed code=`C` (correct). Found bug: `confirmAppointment()` uses non-existent `/appointment/confirm` → must use `PUT /appointment/status-code`. Reminder filter skips first-time (`Z`) patients. |
 | 1.3a | **Apply** the confirm-endpoint fix + broaden reminder eligibility to include `Z` | ✅ | **Done 2026-06-07** — `confirmAppointment()` now `PUT /appointment/status-code`; `isEligibleStatus` allows `""`+`Z`. Syntax-checked. **Committed, not yet pushed** (batch with 1.5 redeploy). |
-| 1.4 | Approve 3 utility templates in Meta: `appointment_reminder`, `review_request`, `recare_reminder` | ⬜ | Submit early — Meta review takes days |
+| 1.4 | Approve 3 utility templates in Meta: `appointment_reminder`, `review_request`, `recare_reminder` | 🔵 | **Drafted (pt-PT + EN), ready to submit** → [whatsapp-templates.md](whatsapp-templates.md). User pastes into Meta; then ⏳ Meta review (days) |
 | 1.5 | Set env: `WHATSAPP_*` creds, `PUBLIC_BASE_URL`, `GOOGLE_REVIEW_URL`, `DASHBOARD_KEY`, `TELNYX_APP_ID`, `TELNYX_OUTBOUND_NUMBER` | ⬜ | Full list in LIFECYCLE_SETUP.md. ⚠️ `DASHBOARD_KEY` still defaults to `vicki-dash` — set a real one (dashboard is currently public) |
 | 1.6 | Configure Meta webhook → `/whatsapp/webhook`, subscribe to `messages`, verify signature passes | ⬜ | Needs 1.2 done |
 | 1.7 | E2E test: reminder → tap Confirm → Newsoft write-back; replay webhook → no double-write (idempotent) | ⬜ | Use Meta test number to your own WhatsApp |
