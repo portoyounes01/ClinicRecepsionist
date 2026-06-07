@@ -102,7 +102,7 @@ Variables: `{{1}}` first name · `{{2}}` clinic · `{{3}}` review link · no but
 ```
 Olá *{{1}}*! 🦷
 
-Ainda vai a tempo! A sua opinião sobre a sua visita ajuda outras pessoas e significa muito para nós. Demora menos de 1 minuto:
+Se tiver um momento, adoraríamos saber como correu a sua visita. A sua opinião significa muito para nós — sem qualquer pressa:
 👉 {{3}}
 
 Com carinho, equipa {{2}} 💙
@@ -112,7 +112,7 @@ Com carinho, equipa {{2}} 💙
 ```
 Hi *{{1}}*! 🦷
 
-There's still time! Your feedback on your visit helps others and means a lot to us. It takes less than a minute:
+Whenever you have a moment, we'd love to hear how your visit went. Your feedback means a lot to us — no rush at all:
 👉 {{3}}
 
 Warm wishes, the {{2}} team 💙
