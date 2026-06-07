@@ -130,7 +130,7 @@ async function handleReviewNudgeJob(payload) {
 
   const link = reviewLink(clinic, review.token);
   if (!review.opt_out_whatsapp) {
-    await wa.sendTemplate(clinic, review.phone_e164, clinic.whatsapp.templates.review, {
+    await wa.sendTemplate(clinic, review.phone_e164, clinic.whatsapp.templates.reviewNudge, {
       lang: review.language === 'en' ? 'en' : 'pt_PT',
       bodyParams: [wa.firstName(review.name, review.language), clinic.name, link],
     });

@@ -16,6 +16,7 @@ General settings (all three):
 |---|---|---|
 | `appointment_reminder` | **Quick reply** — `Confirmar` / `Confirm` | **Call phone number** — `Reagendar` / `Reschedule` → clinic phone |
 | `review_request` | *(none)* | — |
+| `review_reminder` | *(none)* | — |
 | `recare_reminder` | **Quick reply** — `Marcar` / `Book` | — |
 
 ---
@@ -93,6 +94,34 @@ Thank you so much! 💙
 
 ---
 
+## 2b. `review_reminder`  (Utility) — the review follow-up
+Sent as the 2 review nudges (next-day + 1 week) if the patient hasn't reviewed yet. Softer than the first ask.
+Variables: `{{1}}` first name · `{{2}}` clinic · `{{3}}` review link · no buttons
+
+**Portuguese (pt_PT):**
+```
+Olá *{{1}}*! 🦷
+
+Ainda vai a tempo! A sua opinião sobre a sua visita ajuda outras pessoas e significa muito para nós. Demora menos de 1 minuto:
+👉 {{3}}
+
+Com carinho, equipa {{2}} 💙
+```
+
+**English (en):**
+```
+Hi *{{1}}*! 🦷
+
+There's still time! Your feedback on your visit helps others and means a lot to us. It takes less than a minute:
+👉 {{3}}
+
+Warm wishes, the {{2}} team 💙
+```
+
+**Samples:** {{1}}=`Valter` · {{2}}=`Instituto Vilas Boas` · {{3}}=`https://<your-host>/review/ab12cd34`
+
+---
+
 ## 3. `recare_reminder`  (Utility — ⚠️ may be classed as Marketing)
 Variables: `{{1}}` first name · `{{2}}` clinic · button: Quick reply `Marcar`/`Book`
 > Also reused for **reactivation** (dormant patients) unless `WHATSAPP_TEMPLATE_REACTIVATION` is set.
@@ -130,4 +159,4 @@ We're here to help keep your *smile confident!*
 ---
 
 ## After approval
-If Meta forces different template names, override via env: `WHATSAPP_TEMPLATE_REMINDER`, `WHATSAPP_TEMPLATE_REVIEW`, `WHATSAPP_TEMPLATE_RECARE`, `WHATSAPP_TEMPLATE_REACTIVATION` (set in task 1.5).
+If Meta forces different template names, override via env: `WHATSAPP_TEMPLATE_REMINDER`, `WHATSAPP_TEMPLATE_REVIEW`, `WHATSAPP_TEMPLATE_REVIEW_NUDGE`, `WHATSAPP_TEMPLATE_RECARE`, `WHATSAPP_TEMPLATE_REACTIVATION` (set in task 1.5).
