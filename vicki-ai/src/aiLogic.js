@@ -1523,6 +1523,29 @@ function speakIn(languageState, pt, en) {
   return languageState === 'en' ? en : pt;
 }
 
+// GLOBAL goodbye detection — runs for EVERY agent, not just the router.
+// Before this, goodbye was only checked when currentAgent === 'router', so a
+// caller saying "Adeus" after booking/cancelling (when they're in the booking
+// or appointments agent) was never recognised and got stuck in a reprompt loop.
+function detectGoodbye(userText) {
+  const text = normalizeForIntent(userText);
+  if (!text || userText === '[continua]') return false;
+
+  // Unambiguous farewells — caller is clearly ending the call, fire anywhere.
+  const hardBye = /\b(adeus|tchau|ate logo|ate ja|ate amanha|ate breve|bye|goodbye|good bye)\b/.test(text);
+  // Soft closers — only a goodbye if the WHOLE utterance is just a closer
+  // ("obrigado", "não obrigado", "era só isso", "thanks"), with nothing else.
+  const softBye = /^(nao,?\s+|ok,?\s+|sim,?\s+|pronto,?\s+)?(muito\s+)?(obrigad[ao]|era so isso|era so|so isso|mais nada|foi tudo|nothing else|that'?s all|thanks|thank you)[\s.,!]*$/.test(text);
+  if (!hardBye && !softBye) return false;
+
+  // Never hang up if the same turn also contains an actionable request
+  // (e.g. "obrigado, mas queria marcar uma limpeza").
+  const hasRequest = /\b(marcar|agendar|remarcar|desmarcar|cancelar|consulta|vaga|vagas|disponibilidade|horario|quero|queria|gostaria|preciso|book|schedule|appointment|cancel|reschedule)\b/.test(text);
+  if (hasRequest) return false;
+
+  return true;
+}
+
 function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
   const text = normalizeForIntent(userText);
   if (!text || userText === '[continua]') return null;
@@ -1647,7 +1670,7 @@ function deterministicRouterDecision(userText, languageState) {
       intent: 'goodbye',
       action: 'hangup',
       nextAgent: 'router',
-      speak: speakIn(languageState, 'Muito obrigada por ligar para o Instituto Vilas Boas. Até logo!', 'Thank you for calling Instituto Vilas Boas. Goodbye!'),
+      speak: speakIn(languageState, 'Muito obrigada por ligar para o Instituto Vilas Boas. Vou desligar agora. Até logo!', 'Thank you for calling Instituto Vilas Boas. I will hang up the phone now. Goodbye!'),
     };
   }
 
@@ -1826,6 +1849,17 @@ async function processTurn({
 
   const nextLanguageState = detectCallerLanguage(userText, languageState);
   const finalize = (result) => ({ ...result, languageState: nextLanguageState });
+
+  // GLOBAL goodbye — runs for every agent so "Adeus" after a booking/cancel ends
+  // the call with a farewell instead of looping the "não percebi" reprompt.
+  if (detectGoodbye(userText)) {
+    const speak = speakIn(nextLanguageState,
+      'Muito obrigada por ligar para o Instituto Vilas Boas. Vou desligar agora. Até logo!',
+      'Thank you for calling Instituto Vilas Boas. I will hang up the phone now. Goodbye!');
+    const parsed = { speak, action: 'hangup', intent: 'goodbye', params: {} };
+    history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+    return finalize({ speak, action: 'hangup', history, currentAgent, unclearTurns: 0, bookingReasonText });
+  }
 
   const directClinicInfo = clinicInfoAnswer(userText, nextLanguageState, clinicInfo);
   if (directClinicInfo) {
