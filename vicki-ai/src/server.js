@@ -185,9 +185,11 @@ app.post('/telnyx/keep-alive', (req, res) => {
 
   console.log(`[Telnyx] Keep-alive → Extend session | SID: ${callSid || 'unknown'}`);
   console.log(`[Telnyx] Keep-alive raw body:`, JSON.stringify(req.body));
+  // Short pause so a flagged hangup (hangupCalls) is honored within ~5s even if
+  // the Call Control API hangup doesn't apply to this TeXML call.
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Pause length="10"/>
+  <Pause length="5"/>
   <Redirect method="POST">${baseUrl}/telnyx/keep-alive</Redirect>
 </Response>`);
 

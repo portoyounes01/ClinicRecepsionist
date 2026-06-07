@@ -16,6 +16,42 @@ const telegram      = require('./telegramBot');
 const SONIOX_WS_URL = 'wss://stt-rt.soniox.com/transcribe-websocket';
 const elevenlabs     = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
 
+// ─────────────────────────────────────────────
+// Immediately terminate the Telnyx call via the Call Control API.
+// The TeXML CallSid (format "v3:...") is the call_control_id. This actually
+// ends the call right away, unlike returning <Hangup/> TeXML to ourselves
+// (which Telnyx never sees). Best-effort: callers ALSO add to hangupCalls so
+// the keep-alive loop returns <Hangup/> as a guaranteed fallback.
+// Telnyx Call Control v2: POST /v2/calls/{id}/actions/hangup
+// TODO: verify this terminates a TeXML-app call in production (logs show status).
+function terminateTelnyxCall(callControlId) {
+  return new Promise((resolve) => {
+    if (!callControlId || !process.env.TELNYX_API_KEY) return resolve(false);
+    const payload = JSON.stringify({});
+    const options = {
+      hostname: 'api.telnyx.com',
+      path:     `/v2/calls/${encodeURIComponent(callControlId)}/actions/hangup`,
+      method:   'POST',
+      headers: {
+        Authorization:    `Bearer ${process.env.TELNYX_API_KEY}`,
+        'Content-Type':   'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    };
+    const req = require('https').request(options, (res) => {
+      let data = '';
+      res.on('data', d => { data += d; });
+      res.on('end', () => {
+        console.log(`[Telnyx] Call Control hangup → ${res.statusCode}`);
+        resolve(res.statusCode >= 200 && res.statusCode < 300);
+      });
+    });
+    req.on('error', e => { console.error('[Telnyx] hangup API error:', e.message); resolve(false); });
+    req.write(payload);
+    req.end();
+  });
+}
+
 const CLINIC_INFO = {
   name:     process.env.CLINIC_NAME,
   location: process.env.CLINIC_LOCATION,
@@ -506,32 +542,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         return;
       }
       setTimeout(() => {
-        console.log('[Call] Final audio finished — triggering instant hangup');
+        console.log('[Call] Final audio finished — terminating call');
         if (callSid) {
-          const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
-            ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-            : `http://localhost:${process.env.PORT || 3000}`;
-          const body = `CallSid=${encodeURIComponent(callSid)}`;
-          try {
-            const url = new URL(`${baseUrl}/telnyx/hangup-now`);
-            const reqOpts = {
-              hostname: url.hostname,
-              port:     url.port || (url.protocol === 'https:' ? 443 : 80),
-              path:     url.pathname,
-              method:   'POST',
-              headers:  { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
-            };
-            const mod = url.protocol === 'https:' ? require('https') : require('http');
-            const hreq = mod.request(reqOpts, hres => {
-              console.log(`[Call] hangup-now response: ${hres.statusCode}`);
-            });
-            hreq.on('error', e => console.error('[Call] hangup-now request error:', e.message));
-            hreq.write(body);
-            hreq.end();
-          } catch (e) {
-            console.error('[Call] hangup-now URL error:', e.message);
-            hangupCalls.add(callSid);
-          }
+          hangupCalls.add(callSid);       // guaranteed fallback: keep-alive returns <Hangup/>
+          terminateTelnyxCall(callSid);   // immediate: Telnyx Call Control hangup
         }
         try { ws.close(); } catch (_) {}
       }, 400);
@@ -1128,33 +1142,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           }
           // Small buffer so the last audio byte reaches the patient's speaker
           setTimeout(() => {
-            console.log(`[Call] Goodbye finished — triggering instant hangup`);
-            // Fire /telnyx/hangup-now so Telnyx ends the call immediately
+            console.log(`[Call] Goodbye finished — terminating call`);
             if (callSid) {
-              const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
-                ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-                : `http://localhost:${process.env.PORT || 3000}`;
-              const body = `CallSid=${encodeURIComponent(callSid)}`;
-              try {
-                const url = new URL(`${baseUrl}/telnyx/hangup-now`);
-                const reqOpts = {
-                  hostname: url.hostname,
-                  port:     url.port || (url.protocol === 'https:' ? 443 : 80),
-                  path:     url.pathname,
-                  method:   'POST',
-                  headers:  { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(body) },
-                };
-                const mod = url.protocol === 'https:' ? require('https') : require('http');
-                const hreq = mod.request(reqOpts, hres => {
-                  console.log(`[Call] hangup-now response: ${hres.statusCode}`);
-                });
-                hreq.on('error', e => console.error('[Call] hangup-now request error:', e.message));
-                hreq.write(body);
-                hreq.end();
-              } catch (e) {
-                console.error('[Call] hangup-now URL error:', e.message);
-                hangupCalls.add(callSid); // fallback to keep-alive
-              }
+              hangupCalls.add(callSid);       // guaranteed fallback: keep-alive returns <Hangup/>
+              terminateTelnyxCall(callSid);   // immediate: Telnyx Call Control hangup
             }
             try { ws.close(); } catch (_) {}
           }, 400);
