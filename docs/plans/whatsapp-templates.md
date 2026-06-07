@@ -15,7 +15,7 @@ General settings (all three):
 | Template | Button 1 | Button 2 |
 |---|---|---|
 | `appointment_reminder` | **Quick reply** — `Confirmar` / `Confirm` | **Call phone number** — `Reagendar` / `Reschedule` → clinic phone |
-| `review_request` | *(none)* | — |
+| `review_requests` | *(none)* | — |
 | `review_followup` | *(none)* | — |
 | `recare_reminder` | **Quick reply** — `Marcar` / `Book` | — |
 
@@ -63,7 +63,7 @@ We're here to help keep your *smile confident!* 🦷
 
 ---
 
-## 2. `review_request`  (Utility)
+## 2. `review_requests`  (Utility)
 Variables: `{{1}}` first name · `{{2}}` clinic · `{{3}}` review link · no buttons
 
 **Portuguese (pt_PT):**

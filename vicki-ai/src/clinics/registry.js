@@ -54,7 +54,7 @@ function buildLouleClinic() {
       verifyToken:   process.env.WHATSAPP_VERIFY_TOKEN,    // for webhook GET handshake
       templates: {
         reminder:    process.env.WHATSAPP_TEMPLATE_REMINDER     || 'appointment_reminder',
-        review:      process.env.WHATSAPP_TEMPLATE_REVIEW        || 'review_request',
+        review:      process.env.WHATSAPP_TEMPLATE_REVIEW        || 'review_requests',
         reviewNudge: process.env.WHATSAPP_TEMPLATE_REVIEW_NUDGE  || 'review_followup',
         recare:      process.env.WHATSAPP_TEMPLATE_RECARE        || 'recare_reminder',
       },
