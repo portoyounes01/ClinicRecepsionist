@@ -150,8 +150,19 @@ function suppressEarlySpeak(text, currentAgent, pendingSlots) {
 
 function suppressUnsafeEarlySpeak(text) {
   const value = text || '';
-  return /(\best[aá]\s+(tudo\s+)?(marcad|confirmad|tratad|feito|pronto)\b|\bbooked\b|\bconfirmed\b|\bcancelled\b|\bcanceled\b|\bconsulta\s+(marcada|cancelada)\b)/i
+  return /(\best[aá]\s+(tudo\s+)?(marcad|agendad|confirmad|tratad|feito|pronto)\b|fic(ou|aram)\s+(agendad|marcad)|\bbooked\b|\bconfirmed\b|\bcancelled\b|\bcanceled\b|\bconsulta\s+(marcada|agendada|cancelada)\b)/i
     .test(value);
+}
+
+// True if the text claims a booking/cancellation actually happened. Used as a
+// FINAL-speak safety net: Vicki must never tell a patient they're booked/cancelled
+// unless a real book_appointment / cancel_appointment fired this turn.
+function claimsBookingDone(text) {
+  return /(\bagendad[ao]\b|\bmarcad[ao]\b|\bbooked\b|\bconfirmed\b|fic(ou|aram)\s+(agendad|marcad)|est[aá]\s+(tudo\s+)?(marcad|agendad|confirmad)|consulta\s+(marcada|agendada))/i
+    .test(text || '');
+}
+function claimsCancelDone(text) {
+  return /(\bcancelad[ao]\b|\bcancelled\b|\bcanceled\b|consulta\s+cancelada)/i.test(text || '');
 }
 
 // ── Turn-taking config ──────────────────────────────────────────────────────
@@ -917,6 +928,21 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         patient = result.patient;
         patientMemory = getPatientMemory(patient.patientId);
         console.log(`[Newsoft] Active patient set: ${patient.patientName} (ID: ${patient.patientId})`);
+      }
+
+      // ── ANTI-HALLUCINATION: never claim a booking/cancel that didn't happen ──
+      // If Vicki's line says it's booked/cancelled but no real book_appointment /
+      // cancel_appointment fired this turn, replace the false claim and don't hang up.
+      if (result.speak) {
+        const falseBooking = claimsBookingDone(result.speak) && result.actionFired !== 'book_appointment';
+        const falseCancel  = claimsCancelDone(result.speak)  && result.actionFired !== 'cancel_appointment';
+        if (falseBooking || falseCancel) {
+          console.warn(`[Guard] Suppressed FALSE ${falseBooking ? 'booking' : 'cancel'} claim (actionFired=${result.actionFired}): "${result.speak}"`);
+          result.speak  = (languageState === 'en')
+            ? 'Let me confirm that for you — one moment.'
+            : 'Deixe-me confirmar isso para si, um momento.';
+          if (result.action === 'hangup') result.action = 'none';
+        }
       }
 
       // ── Speak the response ───────────────────────────────────────────

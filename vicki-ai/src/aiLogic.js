@@ -1566,16 +1566,35 @@ function detectGoodbye(userText) {
   return true;
 }
 
-function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
+function clinicInfoAnswer(userText, languageState, clinicInfo = {}, pendingSlots = []) {
   const text = normalizeForIntent(userText);
   if (!text || userText === '[continua]') return null;
+
+  // ACTIVE-BOOKING SKIP: when a slot has been offered and we're waiting for the
+  // patient to confirm, do NOT hijack the turn with a clinic-info answer. Otherwise
+  // a question like "a que horas?" (= the APPOINTMENT time) was answered with the
+  // clinic's OPENING hours and the turn was forced to the info agent — which then
+  // couldn't book, faked a "book_slot" action, and Vicki falsely said "ficou
+  // agendada". With a slot pending, the booking agent answers (it has the slot).
+  // EXCEPTION: a pure "what's your name?" identity question is always safe to answer.
+  const asksVickiName = /\b(o teu nome|teu nome|seu nome|como te chamas|como se chama|qual e o teu nome|qual e o seu nome|quem es tu|quem e voce|your name|what'?s your name|who are you)\b/.test(text);
+  if (pendingSlots && pendingSlots.length > 0 && !asksVickiName) return null;
 
   // BOOKING-INTENT GUARD: if the caller wants to BOOK/cancel/schedule (not just
   // ask "what do you do?"), bail out so the router sends this to the booking flow.
   // Without this, a word like "implantes" matched the services FAQ below and the
   // caller got the generic services list on every turn (infinite loop).
   const wantsAction = /\b(marcar|marque|agendar|agende|marca[cç][aã]o|remarcar|desmarcar|cancelar|quero|queria|gostaria|preciso|consulta com|com a dra|com o dr|com a doutora|com o doutor|disponibilidade|vaga|vagas|book|schedule|appointment|i want|i'd like|i would like|cancel|reschedule)\b/.test(text);
-  if (wantsAction) return null;
+  if (wantsAction && !asksVickiName) return null;
+
+  // VICKI'S OWN NAME — deterministic so she always identifies herself.
+  if (asksVickiName) {
+    return speakIn(
+      languageState,
+      'Sou a Vicki, a assistente virtual do Instituto Vilas Boas em Loulé. Em que posso ajudar?',
+      "I'm Vicki, the virtual assistant at Instituto Vilas Boas in Loulé. How can I help?"
+    );
+  }
 
   const info = {
     name:     clinicInfo.name     || 'Instituto Vilas Boas',
@@ -1879,7 +1898,7 @@ async function processTurn({
     return finalize({ speak, action: 'hangup', history, currentAgent, unclearTurns: 0, bookingReasonText });
   }
 
-  const directClinicInfo = clinicInfoAnswer(userText, nextLanguageState, clinicInfo);
+  const directClinicInfo = clinicInfoAnswer(userText, nextLanguageState, clinicInfo, pendingSlots);
   if (directClinicInfo) {
     const parsed = { speak: directClinicInfo, action: 'none', intent: 'info', params: {} };
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
@@ -2192,7 +2211,7 @@ async function processTurn({
   //   - action='none'   → AI spoke "Está tudo tratado!" without booking
   //   - action='hangup' → AI hung up after "Sim." without ever booking (this bug!)
   if (
-    currentAgent === 'booking' &&
+    (currentAgent === 'booking' || currentAgent === 'info') &&
     pendingSlots?.length > 0 &&
     patient?.patientId &&
     (action === 'none' || action === 'hangup' || action === 'book_appointment')
@@ -2215,9 +2234,11 @@ async function processTurn({
   }
 
   // If pendingSlots + known patient + patient confirmed → MUST book before anything else.
+  // Also fires if the agent drifted to 'info' (a slot is still pending) so a confirm
+  // never silently fails to book.
   if (
-    currentAgent === 'booking' &&
-    (action === 'none' || action === 'hangup') &&
+    (currentAgent === 'booking' || currentAgent === 'info') &&
+    (action === 'none' || action === 'hangup' || action === 'book_slot') &&
     pendingSlots?.length > 0 &&
     patient?.patientId
   ) {
