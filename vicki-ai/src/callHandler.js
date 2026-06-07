@@ -805,7 +805,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // Cancels itself the moment processTurn returns. No agent involved.
       const PATIENCE_FILLERS = languageState === 'en'
         ? ["Just one moment...", "Almost there...", "One second..."]
-        : ["Só mais um momento...", "Já já...", "Quase pronto..."];
+        : ["Só mais um momento...", "Já está quase...", "Quase pronto..."];
       let patienceTimer = null;
       let patienceFired = false;
       patienceTimer = setTimeout(() => {
@@ -1223,7 +1223,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
                 // Returning patient — go straight to the point, warm and personal
                 greeting = greetEn
                   ? `Hi ${firstName}! You've reached Instituto Vilas Boas in Loulé — lovely to hear from you. How can I help today?`
-                  : `Olá ${firstName}! Ligou para o Instituto Vilas Boas em Loulé — que bom ouvir a sua voz. Em que posso ajudar hoje?`;
+                  : `Olá ${firstName}! Ligou para o Instituto Vilas Boas em Loulé — que bom ouvir a sua voz. Em que posso ajudar?`;
               } else if (firstName) {
                 greeting = greetEn
                   ? `Hi ${firstName}! I'm Vicki, the virtual assistant at Instituto Vilas Boas in Loulé. How can I help?`

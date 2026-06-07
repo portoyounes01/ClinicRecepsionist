@@ -70,8 +70,8 @@ function transferSpeak(patient, languageState = 'pt') {
 
   const phrases = [
     `Um momento${name} — vou passar a chamada a um membro da nossa equipa que terá todo o gosto em ajudar.`,
-    `Claro${name} — só um instante enquanto encaminho a chamada para um colega nosso que pode tratar disto.`,
-    `Com certeza${name} — um momento enquanto passo a chamada a alguém da nossa equipa que cuida disto agora mesmo.`,
+    `Claro${name} — só um instante enquanto encaminho a chamada para um colega que pode tratar disto.`,
+    `Com certeza${name} — um momento enquanto passo a chamada para alguém da nossa equipa que cuida disto agora mesmo.`,
   ];
   return phrases[Math.floor(Date.now() / 1000) % phrases.length];
 }
@@ -580,7 +580,7 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
   if (action === 'none' && askedDoctorPreference && isAffirmationOnly(userText) && motiveId) {
     return {
       action: 'check_slots',
-      speak: "Perfeito — já verifico a primeira vaga disponível para si.",
+      speak: "Perfeito — vou verificar a disponibilidade de consulta.",
       params: { ...params, motiveId, reasonText },
     };
   }
@@ -590,7 +590,7 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
     if (motiveId) {
       return {
         action: 'check_slots',
-        speak: "Deixe-me verificar os horários disponíveis para si.",
+        speak: "Muito bem — deixe-me verificar os horários disponíveis para si.",
         params: { ...params, motiveId, reasonText },
       };
     }
@@ -660,7 +660,7 @@ async function resolvePatientForBooking({ patient, params, callerNumber }) {
     return {
       needsPatientDetails: true,
       missing: 'patientName',
-      speak: "Consigo marcar — pode dizer-me o seu nome completo?",
+      speak: "Sim, consigo marcar a consulta — pode dizer-me o seu nome completo?",
     };
   }
 
@@ -699,7 +699,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
           return {
             speak: en
               ? "Aesthetic treatments like Botox or fillers are done by Doutora Aline Marodin at our Quarteira clinic, not here in Loulé. I'll have our team follow up to arrange that for you. Is there anything else I can help with?"
-              : "Os tratamentos de medicina estética, como Botox ou preenchimentos, são feitos pela Doutora Aline Marodin na nossa clínica de Quarteira, não aqui em Loulé. Vou pedir à equipa para entrar em contacto para agendar. Posso ajudar em mais alguma coisa?",
+              : "Os tratamentos de medicina estética, como Botox ou preenchimentos, são feitos pela Doutora Aline Marodin na nossa clínica de Quarteira. Vou pedir à nossa equipa para entrar em contacto consigo de forma a agendar uma consulta. Posso ajudar em mais alguma coisa?",
             action: 'none',
           };
         }
@@ -708,7 +708,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
           return {
             speak: en
               ? "I'm so sorry you're in pain. I don't have an urgent opening in the next few days, so I'll connect you with our team right now to get you seen as soon as possible."
-              : "Lamento muito que esteja com dores. Não tenho vaga urgente nos próximos dias, por isso vou já passar a chamada à nossa equipa para o atendermos o quanto antes.",
+              : "Lamento muito que esteja com dores. Vou transferir a chamada de imediato à nossa equipa para que possamos ajudar o quanto antes.",
             action: 'transfer_to_human',
           };
         }
@@ -716,7 +716,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
           return {
             speak: en
               ? "I don't see anything earlier right now. The last slot I offered is still the soonest I can find. Would you like to keep it?"
-              : "Neste momento não vejo nada mais cedo. A última vaga que ofereci continua a ser a mais próxima que encontro. Quer ficar com essa?",
+              : "Neste momento não tenho vagas mais cedo. A última vaga que ofereci continua a ser a data mais próxima que encontro. Quer ficar com essa vaga?",
             action: 'none',
           };
         }
@@ -725,7 +725,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
           return {
             speak: en
               ? "There are no openings on that day. Would you like me to check another nearby day?"
-              : "Não há vagas livres nesse dia. Quer que veja outro dia próximo?",
+              : "Não há vagas livres nesse dia. Quer que veja outro dia?",
             action: 'none',
           };
         }
@@ -740,7 +740,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         return {
           speak: en
             ? "I couldn't find any openings around then. Would you like me to look at another date?"
-            : "Não encontrei vagas disponíveis nessa altura. Quer que procure noutra data?",
+            : "Não encontrei vagas disponíveis nessa altura. Quer que procure em outra data?",
           action: 'none',
         };
       }
@@ -761,31 +761,31 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         if (sameDoctor) {
           speak = en
             ? `I have ${am1.dayName} — ${am1.timeStr} in the morning or ${pm1.timeStr} in the afternoon, both with ${slots[0].medicName}. Which would you prefer?`
-            : `Tenho ${am1.dayName} — ${am1.timeStr} de manhã ou ${pm1.timeStr} de tarde, ambos com ${slots[0].medicName}. Qual prefere?`;
+            : `Tenho disponível ${am1.dayName} — ${am1.timeStr} de manhã ou ${pm1.timeStr} de tarde, ambos com ${slots[0].medicName}. Qual prefere?`;
         } else {
           speak = en
             ? `I have ${am1.dayName} at ${am1.timeStr} with ${morningSlots[0].medicName}, or ${pm1.timeStr} in the afternoon with ${afternoonSlots[0].medicName}. Which would you prefer?`
-            : `Tenho ${am1.dayName} às ${am1.timeStr} com ${morningSlots[0].medicName}, ou ${pm1.timeStr} de tarde com ${afternoonSlots[0].medicName}. Qual prefere?`;
+            : `Tenho vagas para ${am1.dayName} às ${am1.timeStr} com ${morningSlots[0].medicName}, ou ${pm1.timeStr} de tarde com ${afternoonSlots[0].medicName}. Qual destes prefere?`;
         }
       } else if (morningSlots.length >= 2) {
         // Only morning, 2 options
         const [m1, m2] = morningSlots.map(s => hs(s.date + 'T' + s.time));
         speak = en
           ? `I have ${m1.dayName} at ${m1.timeStr} or ${m2.timeStr}, both in the morning${sameDoctor ? withDoc(slots[0].medicName) : ''}. Which would you prefer?`
-          : `Tenho ${m1.dayName} às ${m1.timeStr} ou às ${m2.timeStr}, ambos de manhã${sameDoctor ? withDoc(slots[0].medicName) : ''}. Qual prefere?`;
+          : `Tenho disponível ${m1.dayName} pelas ${m1.timeStr} ou às ${m2.timeStr}, ambos de manhã${sameDoctor ? withDoc(slots[0].medicName) : ''}. Qual deles deseja?`;
       } else if (afternoonSlots.length >= 2) {
         // Only afternoon, 2 options
         const [p1, p2] = afternoonSlots.map(s => hs(s.date + 'T' + s.time));
         speak = en
           ? `I have ${p1.dayName} at ${p1.timeStr} or ${p2.timeStr}, both in the afternoon${sameDoctor ? withDoc(slots[0].medicName) : ''}. Which would you prefer?`
-          : `Tenho ${p1.dayName} às ${p1.timeStr} ou às ${p2.timeStr}, ambos de tarde${sameDoctor ? withDoc(slots[0].medicName) : ''}. Qual prefere?`;
+          : `Tenho disponível ${p1.dayName} pelas ${p1.timeStr} ou às ${p2.timeStr}, ambos de tarde${sameDoctor ? withDoc(slots[0].medicName) : ''}. Qual deles é melhor para si?`;
       } else {
         // Single slot
         const s = slots[0];
         const t = hs(s.date + 'T' + s.time);
         speak = en
           ? `I have an opening ${t.dayName} at ${t.timeStr} with ${s.medicName} — does that work for you?`
-          : `Tenho vaga ${t.dayName} às ${t.timeStr} com ${s.medicName} — assim está bem para si?`;
+          : `Tenho vaga ${t.dayName} às ${t.timeStr} com ${s.medicName} — posso marcar para si?`;
       }
 
       return {
@@ -830,7 +830,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         return {
           speak: actionResult.speak || (en
             ? "I can book that — could you give me your full name for the patient file?"
-            : "Consigo marcar — pode dizer-me o seu nome completo para o ficheiro do paciente?"),
+            : "Sim, consigo marcar a sua consulta — pode dizer-me o seu nome completo para que eu possa fazer o registo?"),
           action: 'none',
         };
       }
@@ -856,8 +856,8 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
             : `Perfect — you're all booked at Instituto Vilas Boas in Loulé!${smsLineEn} Is there anything else I can help with?`;
         } else {
           confirmSpeak = (bs && t)
-            ? `Perfeito — está tudo marcado no Instituto Vilas Boas em Loulé! Esperamos por si ${t.dayName} às ${t.timeStr} com ${bs.medicName}.${smsLinePt} Posso ajudar em mais alguma coisa?`
-            : `Perfeito — está tudo marcado no Instituto Vilas Boas em Loulé!${smsLinePt} Posso ajudar em mais alguma coisa?`;
+            ? `Perfeito — a sua marcação foi registada no Instituto Vilas Boas em Loulé! Esperamos por si no dia ${t.dayName} às ${t.timeStr} com ${bs.medicName}.${smsLinePt} Posso ajudar em mais alguma coisa?`
+            : `Perfeito — a sua marcação foi registada no Instituto Vilas Boas em Loulé!${smsLinePt} Posso ajudar em mais alguma coisa?`;
         }
         return { speak: confirmSpeak, action: 'none' };
       }
@@ -879,7 +879,7 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         return {
           speak: en
             ? `Done, it's cancelled. I don't see any other appointments booked. Is there anything else I can help with?`
-            : `Pronto, está cancelado. Não vejo mais consultas marcadas. Posso ajudar em mais alguma coisa?`,
+            : `Pronto, está cancelado. Não tenho mais consultas marcadas. Posso ajudar em mais alguma coisa?`,
           action: 'none',
           pendingAppointments: [],
         };
@@ -888,14 +888,14 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         return {
           speak: en
             ? `I'm sorry, I couldn't cancel it in our system. One moment — I'll connect you with someone from our team who can handle this for you.`
-            : `Peço desculpa, não foi possível cancelar no nosso sistema. Um momento — vou passar a chamada a alguém da nossa equipa que trata disto para si.`,
+            : `Peço desculpa, não foi possível cancelar no nosso sistema. Aguarde um momento — vou passar a chamada a alguém da nossa equipa que trata disto para si.`,
           action: 'transfer_to_human',
         };
       }
       return {
         speak: en
           ? `Done, it's cancelled. I know things come up — would you like me to find another opening so you don't lose your place?`
-          : `Pronto, está cancelado. Sei que às vezes surgem imprevistos — quer que encontre outra vaga para não perder o seu lugar?`,
+          : `Pronto, está cancelado. Sei que por vezes surgem imprevistos — quer que encontre outra vaga para não perder o seu lugar?`,
         action: 'none',
       };
 
@@ -1578,7 +1578,7 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
   if (asksServices) {
     return speakIn(
       languageState,
-      'Fazemos medicina dentária, incluindo implantes, ortodontia, alinhadores invisíveis, facetas, branqueamento, endodontia, cirurgia oral, odontopediatria e higiene oral. Também temos estética facial, osteopatia e podologia.',
+      'As nossas consultas de medicina dentária incluem implantes, coroas, facetas, ortodontia, alinhadores invisíveis, branqueamento dentário, endodontia, cirurgia oral, odontopediatria e higiene oral. Também realizamos consultas de estética facial, osteopatia e podologia.',
       'We provide dental care including implants, orthodontics, clear aligners, veneers, whitening, root canal treatment, oral surgery, pediatric dentistry, and hygiene appointments. We also offer facial aesthetics, osteopathy, and podiatry.'
     );
   }
@@ -1587,7 +1587,7 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}) {
   if (asksEnglish) {
     return speakIn(
       languageState,
-      'Sim, a nossa equipa fala português e pode ajudar pacientes em inglês.',
+      'Sim, a nossa equipa fala português e pode ajudar pacientes na língua inglesa.',
       'Yes, our team speaks Portuguese and can help patients in English.'
     );
   }
@@ -1991,7 +1991,7 @@ async function processTurn({
       `[AI] JSON parse failed | model=${LIVE_AGENT_MODEL} agent=${currentAgent} ` +
       `error=${err.message} raw=${JSON.stringify(fullText.slice(0, 500))}`
     );
-    parsed = { speak: "Desculpe, não percebi bem — pode repetir?", action: 'none', intent: null };
+    parsed = { speak: "Desculpe, não percebi bem — importa-se de repetir?", action: 'none', intent: null };
   }
 
   let { speak, action = 'none', params = {}, intent } = parsed;
@@ -2129,7 +2129,7 @@ async function processTurn({
     if (repeatCount >= 2) {  // current + 2 in history = 3 total
       console.log(`[Guard] LOOP DETECTED — Vicki repeated "${speakNorm.slice(0, 50)}..." ${repeatCount + 1} times. Transferring to human.`);
       action = 'transfer_to_human';
-      speak = 'Peço desculpa — parece que não estou a conseguir dar-lhe a ajuda que precisa. Vou passar a chamada a um colega que poderá ajudar melhor.';
+      speak = 'Peço desculpa — parece que não estou a conseguir dar-lhe a ajuda que precisa. Aguarde um momento, vou passar a chamada para um colega que poderá ajudar melhor.';
       parsed.action = action;
       parsed.speak = speak;
     }
