@@ -23,6 +23,14 @@
 
 ## LOG
 
+### 2026-06-07 — Language-by-phone + learn-from-calls + Newsoft visit backfill
+- **Language:** Newsoft has no language field (confirmed). New [src/lang.js](../../vicki-ai/src/lang.js) `pickLang(knownLang, phone)`: `+351`/local → pt, foreign country code → en, known (voice-detected) language wins; default pt. Applied at every lifecycle send site. `patientMemory.updateAfterCall` now persists voice-detected language to the lifecycle `patients` row (UPDATE-only, fire-and-forget — never affects the live call).
+- **Old/dormant patients:** new [src/lifecycle/backfill.js](../../vicki-ai/src/lifecycle/backfill.js) `backfillVisits(clinic, months=24)` derives `last_visit` from past Newsoft appointments (month-chunked; real-doctor + phone + attended only, excludes E/M/F/D), seeds `last_visit` + `recare_due_date` so recare/reactivation can reach them. Manual runner `scripts/backfill-visits.js`; weekly auto-run in boot.js.
+- Read-only vs Newsoft, sends nothing (still gated by `LIFECYCLE_TEST_NUMBERS`). `node -c` clean; `pickLang` unit cases pass; `npm run test:lifecycle` passes.
+- ⚠️ **Go-live caution:** after the first backfill, many overdue patients will be recare/reactivation-eligible. Reactivation is batch-capped (50/sweep); **recare has no cap** → could enqueue a large first batch. During testing the send-gate blocks real sends; before full go-live, consider a recare daily cap or phased rollout.
+- Env added: `BACKFILL_MONTHS` (default 24).
+
+
 ### 2026-06-07 — Daily 07:30 reminder batch + personalized templates (built)
 Implemented the user's batch model: **once each morning at 07:30, message everyone with an appointment `today+2`** (date-based), clinic-wide.
 - `newsoftApi.js`: new `getAppointmentsByDateRange(begin,end)` (clinic-wide, no PatientId) + export.
