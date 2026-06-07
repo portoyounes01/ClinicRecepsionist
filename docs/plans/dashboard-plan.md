@@ -33,8 +33,53 @@ All in Postgres ([schema.sql](../../vicki-ai/src/db/schema.sql)) except voice ca
 
 ## Dashboard sections
 
-### A. Overview (KPI cards, date-range aware)
-Reminders sent · confirmation rate · confirmed via WhatsApp vs call · cancellations · **no-shows prevented** (confirmed that would've lapsed) · reviews collected · avg rating · Google reviews driven · low-rating alerts · recare sent / re-booked · reactivation sent · messages out/in · delivery rate · **calls handled / booking rate / transfer rate / abandonment** · jobs pending/failed.
+### A. Analytics (counts **and** percentages, date-range aware)
+
+Every metric shows a **count + a percentage** (of a stated denominator). **Exclude failed/errored items** from these numbers — failures live only in System Health (section G), never in the analytics. Each card: big number, the %, and a tiny "X of Y" denominator label.
+
+**Voice calls** (base = calls answered)
+| Metric | Count | % of |
+|---|---|---|
+| Calls answered | n | — (base) |
+| Booked on the call | n | answered |
+| Questions answered / info | n | answered |
+| Confirmed on a confirm-call | n | confirm-calls placed |
+| Transferred to human | n | answered (= transfer rate) |
+| Cancellations handled | n | answered |
+| Emergencies / urgent | n | answered |
+| Avg call duration | mm:ss | — |
+
+**WhatsApp / confirmations** (base = reminders sent)
+| Metric | Count | % of |
+|---|---|---|
+| Reminders sent | n | — (base) |
+| Confirmed via WhatsApp | n | reminders (WhatsApp confirm rate) |
+| Confirmed via call | n | confirm-calls placed |
+| **Total confirmed** | n | reminders (overall confirm rate) |
+| Reschedule/cancel taps | n | reminders |
+| Delivered | n | sent (delivery rate) |
+| Read | n | delivered (read rate) |
+
+**Reviews** (base = review requests sent)
+| Metric | Count | % of |
+|---|---|---|
+| Review requests sent | n | — (base) |
+| Completed | n | requests (completion rate) |
+| Sent to Google (≥4★) | n | completed |
+| Low (<4★) | n | completed |
+| Avg rating | x.x / 5 | — |
+
+**Recare / Reactivation**
+| Metric | Count | % of |
+|---|---|---|
+| Recare sent | n | — |
+| Recare → re-booked | n | recare sent |
+| Reactivation sent | n | — |
+| Reactivation → re-booked | n | reactivation sent |
+
+**Headline outcomes** (the "did Vicki help?" line): **no-shows prevented** (confirmed appts that would've lapsed) · total appointments confirmed · reviews collected · patients re-booked via recare/reactivation — each with its %.
+
+> Rule: anything `status='failed'` (undelivered WhatsApp/SMS, errored jobs, dropped calls) is **excluded** from all percentages above and surfaced only in System Health. So every rate reflects real, successful activity.
 
 ### B. Appointments & Confirmations (table)
 Row per tracked appointment: patient (masked), date/time, doctor, reminder sent at, **confirm status** (pending/confirmed/cancelled), **channel** (WhatsApp/call), language, source. Filters: status, date range, doctor. This is the "did Vicki get it confirmed?" view.
