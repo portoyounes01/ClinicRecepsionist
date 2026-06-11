@@ -1774,12 +1774,21 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
     };
   }
 
-  const pricing = /\b(price|cost|charge|quote|how much|quanto custa|preco|custo|orcamento|honorarios)\b/.test(text);
-  if (pricing && currentAgent !== 'info' && currentAgent !== 'emergency') {
+  // PRICING — answer in ONE turn, in place (no bridge phrase + transfer hop =
+  // no dead air). Approved wording: free evaluation consultation, no amounts.
+  // We do NOT trigger on an in-progress booking (a price aside mid-booking is
+  // rare and the booking flow handles its own context).
+  const pricing = /\b(price|cost|charge|quote|how much|quanto custa|preco|custo|orcamento|honorarios|valor|valores|fees?)\b/.test(text);
+  if (pricing && currentAgent !== 'emergency') {
     return {
-      speak: speakIn(languageState, 'Boa pergunta, já lhe dou essa informação.', "Good question, I can help with that."),
-      action: 'transfer_to_info',
+      speak: speakIn(
+        languageState,
+        'Os nossos médicos começam sempre com uma consulta de avaliação gratuita: analisam o seu caso e entregam um plano com os valores antes de qualquer decisão. Quer que marque essa avaliação?',
+        'Our doctors always start with a free evaluation consultation: they assess your case and give you a plan with the costs before any decision. Would you like me to book that evaluation?'
+      ),
+      action: 'none',
       currentAgent: 'info',
+      autoSpeak: false,   // the answer is complete + ends with a question → wait for the patient
     };
   }
 
@@ -2043,7 +2052,12 @@ async function processTurn({
       currentAgent: transferOverride.currentAgent,
       unclearTurns: 0,
       bookingReasonText,
-      autoSpeak: currentAgent !== transferOverride.currentAgent,
+      // Honour an explicit autoSpeak from the override (e.g. the in-place price
+      // answer sets false so it waits for the patient); else auto-speak only
+      // when the agent actually changed.
+      autoSpeak: transferOverride.autoSpeak !== undefined
+        ? transferOverride.autoSpeak
+        : currentAgent !== transferOverride.currentAgent,
     });
   }
 
