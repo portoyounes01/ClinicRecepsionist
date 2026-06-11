@@ -2848,13 +2848,18 @@ async function processTurn({
             history.push({ role: 'system', content: `Consultas do paciente:\n${formatted._appointmentsContext}\n\nUsa os valores [ref:ID] apenas server-side para cancel_appointment. NUNCA reveles IDs ao paciente.` });
           }
           history.push({ role: 'assistant', content: JSON.stringify({ speak: formatted.speak, action: formatted.action || 'none', params: {} }) });
+          // After a SUCCESSFUL booking, clear the pending slots. Otherwise they
+          // linger and the end-of-call close-decline path (which requires
+          // !pendingSlots) is skipped — so "Está tudo, obrigado" gets hijacked by
+          // the booking-confirmation guard and the call never hangs up cleanly.
+          const bookingSucceeded = action === 'book_appointment' && !!actionResult.appointmentId;
           return finalize({
             speak:           formatted.speak,
             action:          formatted.action || 'none',
             actionFired:     action,
             history,
             currentAgent:    nextAgent,
-            pendingSlots:    formatted.pendingSlots,
+            pendingSlots:    bookingSucceeded ? [] : formatted.pendingSlots,
             pendingAppts:    formatted.pendingAppointments,
             lastOfferedDate: actionResult.lastOfferedDate ?? lastOfferedDate,
             bookingReasonText: updatedBookingReasonText,

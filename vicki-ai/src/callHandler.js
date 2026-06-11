@@ -912,6 +912,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       if (result.currentAgent   !== undefined) currentAgent   = result.currentAgent;
       if (result.unclearTurns   !== undefined) unclearTurns   = result.unclearTurns;
       if (result.pendingSlots   && result.pendingSlots.length)  { pendingSlots  = result.pendingSlots; offeredSlots = accumulateOffered(offeredSlots, result.pendingSlots); }
+      else if (Array.isArray(result.pendingSlots) && result.pendingSlots.length === 0) { pendingSlots = []; } // explicit clear (e.g. after a successful booking)
       if (result.pendingAppts   !== undefined) pendingAppts  = result.pendingAppts;
       if (result.lastOfferedDate !== undefined) lastOfferedDate = result.lastOfferedDate;
       if (result.bookingReasonText !== undefined) bookingReasonText = result.bookingReasonText;
