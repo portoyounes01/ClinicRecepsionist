@@ -1850,7 +1850,7 @@ function deterministicRouterDecision(userText, languageState) {
   return null;
 }
 
-function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, languageState = 'unknown') {
+function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, languageState = 'unknown', userText = '') {
   const louleDoctors  = cachedDoctors.filter(d => LOULE_DOCTOR_IDS.includes(d.medicId));
   const memoryContext = buildMemoryContext(patientMemory);
 
@@ -1858,7 +1858,8 @@ function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMot
     case 'router':       return routerAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
     case 'booking':      return bookingAgent.buildPrompt(patient, clinicInfo, louleDoctors, cachedMotives, memoryContext, languageState);
     case 'appointments': return appointmentsAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
-    case 'info':         return infoAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
+    // Info agent gets RAG facts retrieved from the clinic website KB for THIS question.
+    case 'info':         return infoAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState, userText);
     case 'emergency':    return emergencyAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
     default:             return routerAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
   }
@@ -2067,7 +2068,7 @@ async function processTurn({
     }
   }
 
-  const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState);
+  const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState, userText);
 
   const modelStart = Date.now();
   let firstChunkAt = null;
@@ -2480,7 +2481,7 @@ async function processTurn({
       // The router's bridge phrase (speak) was already fired via onSpeakReady above;
       // we now immediately follow through with the specialist's first response.
       console.log(`[Agent] Router collapse: running ${nextAgent} inline (no 2nd LLM hop)`);
-      const specialistPrompt = getAgentPrompt(nextAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState);
+      const specialistPrompt = getAgentPrompt(nextAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState, userText);
       const specialistStart = Date.now();
       let sFirstChunkAt = null, sFullText = '', sSpeakFired = false, sFinishReason = null;
 

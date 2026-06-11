@@ -3,8 +3,9 @@
 // ============================================================
 
 const { behaviorContract } = require('./sharedPrompt');
+const { knowledgeBlock } = require('../data/clinicKnowledge');
 
-function buildPrompt(patient, clinicInfo, memoryContext, languageState = 'unknown') {
+function buildPrompt(patient, clinicInfo, memoryContext, languageState = 'unknown', userText = '') {
   const firstName = patient?.patientName?.split(' ')[0] || null;
   const patientCtx = firstName ? `PACIENTE: ${firstName}.` : 'PACIENTE: desconhecido.';
   const clinic = {
@@ -18,6 +19,13 @@ function buildPrompt(patient, clinicInfo, memoryContext, languageState = 'unknow
   };
   const memoryBlock = memoryContext
     ? `\nHISTORICO PARA CALOR HUMANO:\n${memoryContext}\n`
+    : '';
+
+  // RAG: pull the most relevant facts from the clinic website knowledge base
+  // for THIS question. Grounded — the agent answers only from these facts.
+  const kb = knowledgeBlock(userText, languageState === 'en' ? 'en' : 'pt');
+  const kbBlock = kb
+    ? `\nFACTOS DO SITE RELEVANTES PARA ESTA PERGUNTA (responde com base nestes, sao verdade):\n${kb}\n`
     : '';
 
   return `${behaviorContract(languageState)}
@@ -35,7 +43,7 @@ CONHECIMENTO DA CLINICA:
 - A equipa fala portugues e pode ajudar pacientes em ingles.
 - Servicos dentarios: implantes, ortodontia, alinhadores invisiveis, facetas, branqueamento, periodontologia, endodontia, cirurgia oral, odontopediatria, higiene oral, obturacoes/restauracoes.
 - Outros servicos: estetica facial, osteopatia e podologia.
-
+${kbBlock}
 PRECOS:
 Se o paciente pedir preco/custo/honorarios, nunca digas valores. Explica de forma curta que os medicos comecam por uma consulta de avaliacao gratuita, analisam o caso e entregam plano/precos antes de qualquer decisao. Depois pergunta se quer marcar essa avaliacao.
 Se insistir uma segunda vez por valor indicativo, transfer_to_human.
