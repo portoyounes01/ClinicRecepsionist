@@ -1476,7 +1476,13 @@ async function executeAction(action, params, patient, callerNumber, history = []
               return Math.abs(ah*60+am - wMin) - Math.abs(bh*60+bm - wMin);
             })[0];
           })()) ||
-          // 4. Match by explicit ordinal choice ("second one", "a segunda", "option 2")
+          // 4. PERIOD WINS over ordinal: if the patient explicitly stated a period
+          // (manhã/tarde), honour it before any ordinal. This fixes the bug where
+          // "prefiro da parte da tarde" booked the MORNING slot because a weak/
+          // default ordinal (index 0) fired first and picked slot[0] = morning.
+          (wantedPeriod && params._pendingSlots.find(s => normPeriod(s.period) === wantedPeriod)) ||
+          // 5. Match by explicit ordinal choice ("second one", "a segunda", "option 2")
+          //    — only when the patient did NOT also state a period.
           (explicitOrdinal && (() => {
             const idx = explicitOrdinal.index < 0
               ? params._pendingSlots.length - 1
@@ -1485,8 +1491,6 @@ async function executeAction(action, params, patient, callerNumber, history = []
               ? params._pendingSlots[idx]
               : null;
           })()) ||
-          // 5. Match by normalized period alone
-          (wantedPeriod && params._pendingSlots.find(s => normPeriod(s.period) === wantedPeriod)) ||
           // 6. Match by partial slotBase64 prefix (AI may truncate)
           (params.slotBase64 && params._pendingSlots.find(s => s.slotBase64?.startsWith(params.slotBase64?.slice(0, 20)))) ||
           // 7. Match by medicName
