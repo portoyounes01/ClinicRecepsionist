@@ -519,8 +519,13 @@ function inferMotiveIdFromReasonText(reasonText) {
 }
 
 function isAffirmationOnly(userText) {
-  return /^(yes|yeah|yep|ok|okay|sure|please|yes please|go ahead|first available|no preference|doesn'?t matter)(?:\s+\1)*[.!?]*$/i
-    .test((userText || '').trim());
+  const t = normalizeForIntent(userText || '');
+  if (!t) return false;
+  // English + Portuguese plain affirmations (optionally with a short tail like
+  // "yes please", "sim por favor", "claro que sim"). Kept tight so it doesn't
+  // swallow real requests ("yes but with Dr X" won't match — has extra intent).
+  return /^(yes|yeah|yep|yup|ok|okay|sure|please|go ahead|first available|no preference|doesn'?t matter|sim|claro|certo|exato|isso|pode|pode ser|por favor|faca|faça|esta bem|está bem|com certeza)(\s+(please|por favor|sim|claro|obrigad[oa]|that works|esta bem|está bem))?[.!?]*$/i
+    .test(t);
 }
 
 function isExplicitBookingConfirmation(text) {
@@ -567,8 +572,29 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
 
   const previousSpeak = lastAssistantSpeak(history);
   const askedDoctorPreference = /\bpreferred doctor\b|\bfirst available\b/i.test(previousSpeak);
+  // Did Vicki's PREVIOUS turn ask permission to check availability? If so, a
+  // plain "yes" now should trigger the actual search.
+  const askedToCheckAvailability = /\b(would you like|shall i|want me to|should i)\b.*\b(check|availab|slot|see)\b/i.test(previousSpeak)
+    || /\b(quer que|deseja que|gostaria que|posso)\b.*\b(verific|disponib|veja|vaga|horário|horario)\b/i.test(previousSpeak);
   const reasonText = params.reasonText || bookingReasonText;
   const motiveId = params.motiveId || inferMotiveIdFromReasonText(reasonText);
+
+  // ── HARD BLOCK: don't search while ASKING permission to search ──────────────
+  // Bug: the LLM says "Would you like me to check the first available slot?" but
+  // attaches action:check_slots to the SAME turn, so it searches without waiting
+  // for the patient's "yes". If the speak is a permission question about checking
+  // availability, force action:none so Vicki actually waits for the answer.
+  if (action === 'check_slots') {
+    const s = (speak || '').toLowerCase();
+    const isAskingToCheck = /\?\s*$/.test(s.trim()) && (
+      /\b(would you like|shall i|should i|want me to|do you want me)\b/.test(s) ||
+      /\b(quer que|deseja que|gostaria que|posso verificar|quer que verifique|quer que veja)\b/.test(s)
+    );
+    if (isAskingToCheck) {
+      console.log('[Guard] check_slots suppressed — speak is asking permission; waiting for patient.');
+      return { action: 'none', speak, params };
+    }
+  }
 
   // ── HARD BLOCK: check_slots requires a motiveId ─────────────────────────────
   // If the AI tries to search slots before knowing the reason, intercept it
@@ -590,7 +616,8 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
     return { action, speak, params: { ...params, motiveId, reasonText } };
   }
 
-  if (action === 'none' && askedDoctorPreference && isAffirmationOnly(userText) && motiveId) {
+  if (action === 'none' && (askedDoctorPreference || askedToCheckAvailability) && isAffirmationOnly(userText) && motiveId) {
+    console.log('[Guard] patient confirmed the availability check → running check_slots now.');
     return {
       action: 'check_slots',
       speak: "Perfeito — vou verificar a disponibilidade de consulta.",
