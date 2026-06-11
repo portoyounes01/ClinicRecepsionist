@@ -641,11 +641,17 @@ function applyBookingStateGuard({ currentAgent, action, speak, params, userText,
     };
   }
 
-  const explicitBookingConfirmation = isExplicitBookingConfirmation(userText) || isExplicitBookingConfirmation(speak);
+  // Only the PATIENT's words confirm a booking. Vicki saying "confirmo/está
+  // marcado" is never proof of consent — otherwise she books on her own claim.
+  // A bare "sim/ok" counts only when Vicki actually asked to book last turn.
+  const prevAsk = lastAssistantSpeak(history);
+  const vickiAskedToBook = /quer que (eu )?marque|posso marcar|book your appointment|shall i book|confirma que quer marcar|entao quer que marque|então quer que marque|marque essa consulta|book this appointment/i.test(prevAsk || '');
+  const patientPlainYes = /^(sim|claro|certo|exato|isso|pode|pode ser|por favor|ok|okay|yes|yeah|yep|sure)\b/.test(normalizeForIntent(userText));
+  const explicitBookingConfirmation = isExplicitBookingConfirmation(userText) || (vickiAskedToBook && patientPlainYes);
 
   if (action === 'book_appointment' && pendingSlots?.length) {
     if (!explicitBookingConfirmation) {
-      console.warn('[Guard] book_appointment blocked — confirm naturally first.');
+      console.warn('[Guard] book_appointment blocked — patient has not confirmed; asking naturally first.');
       return {
         action: 'none',
         speak: bookingConfirmPrompt(pendingSlots, userText, 'pt'),
@@ -2365,10 +2371,14 @@ async function processTurn({
   ) {
     // The patient does NOT have to recite a phrase. A plain "sim" right after Vicki
     // asks "quer que marque…?" counts, as do natural confirms (confirmo / pode marcar).
+    // CRITICAL: confirmation must come from the PATIENT, never from Vicki's own
+    // "está marcado" speak — otherwise she books when the patient never agreed.
     const prevSpeak   = lastAssistantSpeak(history);
-    const askedToBook = /quer que (eu )?marque|posso marcar|book your appointment|shall i book|confirma que quer marcar/i.test(prevSpeak || '');
+    const askedToBook = /quer que (eu )?marque|posso marcar|book your appointment|shall i book|confirma que quer marcar|quer que marque essa|entao quer que marque|então quer que marque/i.test(prevSpeak || '');
     const plainYes    = /^(sim|claro|certo|exato|isso|pode|pode ser|por favor|okay|ok|yes|yeah|yep|sure)\b/.test(normalizeForIntent(userText));
-    const confirmed   = isExplicitBookingConfirmation(userText) || isExplicitBookingConfirmation(speak) || (askedToBook && plainYes);
+    const patientConfirmedExplicitly = isExplicitBookingConfirmation(userText);
+    // A bare "yes/sim" only counts if Vicki actually asked to book on the previous turn.
+    const confirmed   = patientConfirmedExplicitly || (askedToBook && plainYes);
     const rejected    = /\?/.test(userText || '') || /^(nao|no|nope)\b/.test(normalizeForIntent(userText)) ||
                         /\b(outro|outra|another|other|mais tarde|later|cancel|espera|wait|mud[ae])\b/.test(normalizeForIntent(userText));
 
@@ -2406,23 +2416,29 @@ async function processTurn({
   ) {
     const textLower  = (userText || '').toLowerCase();
     const isConfirmText  = /^(sim|ok|okay|claro|pode|por favor|confirmo|exato|certo|quero|vamos|vai|avança|marca|marque)\b/i.test(textLower);
-    const isConfirmSpeak = /est[aá]\s*(tudo|marcad|feito|confirm|tratad|pronto)/i.test(speak || '');
 
-    // ── SAFETY GATES — never auto-book unless the patient is actually confirming
+    // ── SAFETY GATES — never auto-book unless the PATIENT is actually confirming
     // the offered slot. These prevent the worst possible bug: booking a real
     // appointment (+ SMS) that the patient never agreed to.
     //  1. They rejected it / asked for another time / asked a question
     //     ("no", "another day", "are you sure?", "with Dr X?").
     //  2. Vicki herself is asking for more info (a date/time/name) — in that case
     //     a bare "ok" is answering her question, NOT confirming a booking.
-    // We also no longer treat "two capitalised words" as a confirmation — that
-    // matched doctor names (e.g. "Sylvia Suarez") and booked on a question.
+    //  3. Vicki must have ASKED to book on the previous turn — a bare "ok" with no
+    //     preceding "shall I book?" is NOT a booking confirmation.
+    // We also do NOT book just because Vicki SAID "está marcado": her own speech is
+    // never proof of consent. Only the patient's words confirm a write.
     const isRejectionOrQuestion = /\?/.test(userText || '')
       || /\b(n[aã]o|nao|nope|not|don'?t|didn'?t|another|other|different|instead|outr[oa]|later|earlier|sooner|busy|ocupad|cancel|wait|are you sure|sure\?|change|mud[ae])\b/i.test(textLower);
     const vickiAskingForInfo = /\?/.test(speak || '')
       && /((what|which|que|qual|when|quando)[^?]{0,25}(day|dia|date|data|time|hora|name|nome))|need[^?]{0,15}(date|day|name)|preciso[^?]{0,15}(data|dia|nome)/i.test(speak || '');
+    // Did Vicki actually offer/ask to book on the previous turn? A bare "ok" only
+    // confirms a booking if there was a booking question to answer.
+    const prevSpeakForBook = lastAssistantSpeak(history);
+    const vickiOfferedToBook = /quer que (eu )?marque|posso marcar|book your appointment|shall i book|confirma que quer marcar|entao quer que marque|então quer que marque|marque essa consulta|book this appointment|book that appointment/i.test(prevSpeakForBook || '')
+      || isExplicitBookingConfirmation(userText);  // or the patient said the explicit phrase themselves
 
-    if ((isConfirmText || isConfirmSpeak) && !isRejectionOrQuestion && !vickiAskingForInfo) {
+    if (isConfirmText && vickiOfferedToBook && !isRejectionOrQuestion && !vickiAskingForInfo) {
       // Infer chosenPeriod from recent conversation (last 6 turns) so we book the RIGHT slot.
       // Patient said "tarde" / "14h" / "afternoon" → tarde. "manhã" / "10h" / "morning" → manhã.
       const latestPeriod = inferLatestExplicitPeriodFromUser(history, params);
