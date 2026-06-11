@@ -109,7 +109,7 @@ async function getPatientById(patientId) {
   }
 }
 
-async function createOrUpdatePatient({ patientName, phoneNumber, patientEmail, patientNif }) {
+async function createOrUpdatePatient({ patientName, phoneNumber, patientEmail, patientNif, patientBirthDate, patientFatherName, patientMotherName }) {
   const token = await cache.getToken();
   const normalizedPhone = normalizePhoneNumber(phoneNumber);
 
@@ -121,6 +121,11 @@ async function createOrUpdatePatient({ patientName, phoneNumber, patientEmail, p
     patientEmail,
     patientPhoneNumber: normalizedPhone,
     patientNif,
+    // Family bookings: DOB disambiguates the record + is clinically needed; the
+    // parent name links the child to the caller (Newsoft has these fields).
+    patientBirthDate,
+    patientFatherName,
+    patientMotherName,
     updatePatient:      true,
   });
 

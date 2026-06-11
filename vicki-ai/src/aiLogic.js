@@ -21,6 +21,8 @@ const bookingAgent      = require('./agents/bookingAgent');
 const appointmentsAgent = require('./agents/appointmentsAgent');
 const infoAgent         = require('./agents/infoAgent');
 const emergencyAgent    = require('./agents/emergencyAgent');
+const familyAgent       = require('./agents/familyAgent');
+const { findFamilyMember, rememberFamilyMember } = require('./familyMembers');
 
 const https   = require('https');
 const openai  = new OpenAI({
@@ -565,6 +567,26 @@ function lastAssistantSpeak(history) {
     } catch (_) {}
   }
   return '';
+}
+
+// Accumulate the family-booking state from the family agent's emitted params
+// across the whole call. The agent re-states what it knows each turn; we keep
+// the latest non-empty value of each field so a booking has the full picture
+// (relation, first name, confirmed full name, DOB) even if collected over turns.
+function buildFamilyContext(history) {
+  const ctx = {};
+  for (const msg of (history || [])) {
+    if (msg.role !== 'assistant') continue;
+    let p;
+    try { p = JSON.parse(msg.content)?.params; } catch (_) { continue; }
+    if (!p) continue;
+    if (p.familyRelation)    ctx.relation     = p.familyRelation;
+    if (p.familyFirstName)   ctx.firstName    = p.familyFirstName;
+    if (p.familyFullName)    ctx.fullName     = p.familyFullName;
+    if (p.familyBirthDate)   ctx.birthDate    = p.familyBirthDate;
+    if (p.familyNameConfirmed === true) ctx.confirmedName = true;
+  }
+  return ctx;
 }
 
 function applyBookingStateGuard({ currentAgent, action, speak, params, userText, pendingSlots, history, bookingReasonText }) {
@@ -1328,8 +1350,45 @@ async function executeAction(action, params, patient, callerNumber, history = []
     }
 
     case 'book_appointment': {
-      const patientResolution = await resolvePatientForBooking({ patient, params, callerNumber });
-      if (patientResolution.needsPatientDetails) return patientResolution;
+      let patientResolution;
+      // ── FAMILY BOOKING: book on the FAMILY MEMBER's chart, not the caller's ──
+      // Triggered only when the family agent has a CONFIRMED name. Reuses a
+      // remembered family member (by first name) or creates a real Newsoft file
+      // (name + DOB + parent link), then books under THEIR id.
+      if (params._familyBooking && params._familyFullName && params._familyNameConfirmed) {
+        const caller = patient;  // the titular (caller) must be identified
+        if (!caller?.patientId) return { error: 'Family booking without an identified caller — transfer to human.' };
+        let fam = findFamilyMember(caller.patientId, params._familyFirstName || params._familyFullName);
+        if (fam?.patientId) {
+          const existing = await newsoft.getPatientById(fam.patientId);
+          patientResolution = { patient: existing || { patientId: fam.patientId, patientName: fam.fullName }, created: false };
+          console.log(`[Family] Reusing remembered family member ${fam.fullName} (id:${fam.patientId})`);
+        } else {
+          const relation = (params._familyRelation || '').toLowerCase();
+          const parentField = /filh|son|daughter|child|kid/.test(relation)
+            ? (caller.patientName ? { patientFatherName: caller.patientName } : {})  // best-effort parent link
+            : {};
+          const created = await newsoft.createOrUpdatePatient({
+            patientName:     params._familyFullName,
+            phoneNumber:     callerNumber,
+            patientBirthDate: params._familyBirthDate || undefined,
+            ...parentField,
+          });
+          if (!created?.patientId) return { error: 'Could not create family member record — transfer to human.' };
+          rememberFamilyMember(caller.patientId, {
+            firstName: params._familyFirstName,
+            fullName:  params._familyFullName,
+            patientId: created.patientId,
+            relation:  params._familyRelation,
+            birthDate: params._familyBirthDate,
+          });
+          patientResolution = { patient: created, created: true };
+          console.log(`[Family] Created family member ${params._familyFullName} (id:${created.patientId}) under caller ${caller.patientId}`);
+        }
+      } else {
+        patientResolution = await resolvePatientForBooking({ patient, params, callerNumber });
+        if (patientResolution.needsPatientDetails) return patientResolution;
+      }
 
       const patientForBooking = patientResolution.patient;
       if (!patientForBooking?.patientId) return { error: 'No patient on file — cannot book.' };
@@ -1798,6 +1857,19 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
     };
   }
 
+  // FAMILY BOOKING — caller wants to book for a family member, not themselves.
+  // Route to the dedicated family agent so we book on the FAMILY MEMBER's chart
+  // (creating their file if needed), never the caller's. Needs a known caller.
+  const familyMember = /\b(para (o|a) meu|para (o|a) minha|do meu|da minha|para (o|a) filh|meu filho|minha filha|minha esposa|meu marido|meu esposo|minha mulher|for my (son|daughter|kid|child|wife|husband|partner|mother|father|mom|dad)|my (son|daughter|kid|child)\b)/.test(text);
+  const wantsToBook = /\b(marcar|agendar|consulta|book|schedule|appointment)\b/.test(text);
+  if (familyMember && wantsToBook && currentAgent !== 'family' && currentAgent !== 'emergency') {
+    return {
+      speak: '',
+      action: 'transfer_to_family',
+      currentAgent: 'family',
+    };
+  }
+
   const human = /\b(real person|human|reception|receptionist|manager|complaint|billing|bill|overcharged|charged incorrectly|insurance|health plan|falar com alguem|pessoa real|rececao|gerente|reclamacao|faturacao|fatura|cobraram|seguro|subsistema|plano de saude)\b/.test(text);
   if (human && currentAgent !== 'human') {
     return {
@@ -1870,6 +1942,17 @@ function deterministicRouterDecision(userText, languageState) {
       speak: speakIn(languageState, 'Claro, já verifico isso para si.', 'Of course, I can check that for you.'),
     };
   }
+  // Family booking BEFORE generic booking — "marcar para a minha filha" must go
+  // to the family agent (books on the family member's chart), not normal booking.
+  const familyBooking = /\b(para (o|a) meu|para (o|a) minha|do meu|da minha|para (o|a) filh|meu filho|minha filha|minha esposa|meu marido|meu esposo|minha mulher|for my (son|daughter|kid|child|wife|husband|partner|mother|father|mom|dad)|my (son|daughter|kid|child)\b)/.test(text);
+  if (familyBooking && booking) {
+    return {
+      intent: 'family',
+      action: 'none',
+      nextAgent: 'family',
+      speak: speakIn(languageState, 'Com certeza. Pode dizer-me o nome próprio dele ou dela?', 'Of course. Could you tell me their first name?'),
+    };
+  }
   if (booking) {
     return {
       intent: 'booking',
@@ -1892,7 +1975,7 @@ function deterministicRouterDecision(userText, languageState) {
   return null;
 }
 
-function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, languageState = 'unknown', userText = '') {
+function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, languageState = 'unknown', userText = '', familyContext = {}) {
   const louleDoctors  = cachedDoctors.filter(d => LOULE_DOCTOR_IDS.includes(d.medicId));
   const memoryContext = buildMemoryContext(patientMemory);
 
@@ -1903,6 +1986,7 @@ function getAgentPrompt(agentName, patient, clinicInfo, cachedDoctors, cachedMot
     // Info agent gets RAG facts retrieved from the clinic website KB for THIS question.
     case 'info':         return infoAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState, userText);
     case 'emergency':    return emergencyAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
+    case 'family':       return familyAgent.buildPrompt(patient, clinicInfo, louleDoctors, cachedMotives, memoryContext, languageState, familyContext);
     default:             return routerAgent.buildPrompt(patient, clinicInfo, memoryContext, languageState);
   }
 }
@@ -2115,7 +2199,8 @@ async function processTurn({
     }
   }
 
-  const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState, userText);
+  const familyContext = currentAgent === 'family' ? buildFamilyContext(history) : {};
+  const systemPrompt = getAgentPrompt(currentAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState, userText, familyContext);
 
   const modelStart = Date.now();
   let firstChunkAt = null;
@@ -2364,7 +2449,7 @@ async function processTurn({
   //   - action='none'   → AI spoke "Está tudo tratado!" without booking
   //   - action='hangup' → AI hung up after "Sim." without ever booking (this bug!)
   if (
-    (currentAgent === 'booking' || currentAgent === 'info') &&
+    (currentAgent === 'booking' || currentAgent === 'info' || currentAgent === 'family') &&
     pendingSlots?.length > 0 &&
     patient?.patientId &&
     (action === 'none' || action === 'hangup' || action === 'book_appointment')
@@ -2409,7 +2494,7 @@ async function processTurn({
   // Also fires if the agent drifted to 'info' (a slot is still pending) so a confirm
   // never silently fails to book.
   if (
-    (currentAgent === 'booking' || currentAgent === 'info') &&
+    (currentAgent === 'booking' || currentAgent === 'info' || currentAgent === 'family') &&
     (action === 'none' || action === 'hangup' || action === 'book_slot') &&
     pendingSlots?.length > 0 &&
     patient?.patientId
@@ -2507,7 +2592,7 @@ async function processTurn({
   // Runs for 'router' AND 'human' — so if human transfer happens but
   // patient keeps talking, we can still route them to the right agent.
   if (currentAgent === 'router' || currentAgent === 'human') {
-    const intentMap = { booking: 'booking', appointments: 'appointments', info: 'info', emergency: 'emergency', human: 'human' };
+    const intentMap = { booking: 'booking', family: 'family', appointments: 'appointments', info: 'info', emergency: 'emergency', human: 'human' };
 
     // Patient said goodbye at the very start — hang up gracefully
     if (intent === 'goodbye') {
@@ -2538,7 +2623,8 @@ async function processTurn({
       // The router's bridge phrase (speak) was already fired via onSpeakReady above;
       // we now immediately follow through with the specialist's first response.
       console.log(`[Agent] Router collapse: running ${nextAgent} inline (no 2nd LLM hop)`);
-      const specialistPrompt = getAgentPrompt(nextAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState, userText);
+      const specialistFamilyCtx = nextAgent === 'family' ? buildFamilyContext(history) : {};
+      const specialistPrompt = getAgentPrompt(nextAgent, patient, clinicInfo, cachedDoctors, cachedMotives, patientMemory, nextLanguageState, userText, specialistFamilyCtx);
       const specialistStart = Date.now();
       let sFirstChunkAt = null, sFullText = '', sSpeakFired = false, sFinishReason = null;
 
@@ -2642,6 +2728,7 @@ async function processTurn({
     'transfer_to_info':         'info',
     'transfer_to_appointments': 'appointments',
     'transfer_to_emergency':    'emergency',
+    'transfer_to_family':       'family',
   };
   if (AGENT_TRANSFER_MAP[action]) {
     const targetAgent = AGENT_TRANSFER_MAP[action];
@@ -2717,8 +2804,21 @@ async function processTurn({
   if (action && action !== 'none') {
     try {
       // Inject server-side state into params so executeAction can resolve real IDs
+      // Family booking: attach the accumulated family member details so the
+      // book handler creates/reuses THEIR chart, not the caller's.
+      const famCtxForBook = currentAgent === 'family' ? buildFamilyContext(history) : {};
+      const familyBookParams = (currentAgent === 'family' && famCtxForBook.confirmedName && famCtxForBook.fullName)
+        ? {
+            _familyBooking: true,
+            _familyFirstName: famCtxForBook.firstName,
+            _familyFullName:  famCtxForBook.fullName,
+            _familyNameConfirmed: true,
+            _familyBirthDate: famCtxForBook.birthDate || null,
+            _familyRelation:  famCtxForBook.relation || null,
+          }
+        : {};
       const enrichedParams = action === 'book_appointment'
-        ? { ...params, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText }
+        ? { ...params, ...familyBookParams, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText }
         : action === 'cancel_appointment'
           ? { ...params, _pendingAppts: pendingAppts }
           : action === 'check_slots'

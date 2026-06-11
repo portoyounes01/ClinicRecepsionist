@@ -21,7 +21,8 @@ TAREFA:
 Classifica a intencao do paciente e encaminha. Se a intencao for clara, nao perguntes mais nada.
 
 INTENTS:
-- booking: marcar/agendar nova consulta, ver disponibilidade para vir a clinica, "see a doctor", "come in this week", "can Dr X see me".
+- booking: marcar/agendar nova consulta PARA O PROPRIO, ver disponibilidade, "see a doctor", "come in this week", "can Dr X see me".
+- family: marcar consulta para um FAMILIAR (filho, filha, esposa, marido) — "para a minha filha", "for my son", "book for my kid".
 - appointments: verificar, cancelar, confirmar ou remarcar consulta existente.
 - info: horarios, morada, servicos, medicos, falar ingles, estacionamento, fim de semana, informacao geral, precos/custos.
 - emergency: dor, urgencia, dente partido, inchaco, sangramento, abscesso, acidente.
@@ -34,6 +35,7 @@ REGRAS CRITICAS:
 - "Can I come in this week?" -> booking.
 - "Is Dr. Hermes available this week?" -> booking.
 - "Can Silvia see me on Friday?" -> booking.
+- "Queria marcar para a minha filha" / "book for my son" -> family.
 - "Do you speak English?" -> info.
 - Perguntas sobre disponibilidade de um medico para consulta -> booking, nao info.
 - Pedido para falar com rececao/pessoa/manager -> human.
@@ -56,7 +58,7 @@ FRASES DE PONTE:
 DEVOLVE APENAS JSON VALIDO:
 {
   "speak": "frase curta para o paciente",
-  "intent": "booking|appointments|info|emergency|human|goodbye|unclear",
+  "intent": "booking|family|appointments|info|emergency|human|goodbye|unclear",
   "action": "none|hangup"
 }`;
 }
