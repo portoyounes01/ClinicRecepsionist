@@ -138,10 +138,19 @@ app.post('/telnyx/inbound', (req, res) => {
   console.log(`[Telnyx] Streaming audio to: ${wsUrl}`);
 
   // Ring 1+2 full (6s), ring 3 tone-only (1s) → stream starts mid-ring like a human pickup
+  // Record the whole call (both legs). Telnyx stores the audio and POSTs
+  // /telnyx/recording with a recording URL once the call ends — we attach
+  // that URL to the call_logs row and send the recording link to Telegram.
+  // ⚠️ PHI — Telnyx default storage is NOT covered by a HIPAA BAA. Move to
+  // your own S3 (or sign a Telnyx BAA) before handling real patient calls.
+  // TODO: verify <Record> recordingStatusCallback fires for TeXML stream calls in production.
+  const recordTag = process.env.CALL_RECORDING === 'off' ? '' :
+    `\n  <Record recordingStatusCallback="${baseUrl}/telnyx/recording" recordingStatusCallbackMethod="POST" recordingChannels="dual" recordingTrack="both" playBeep="false" maxLength="1800" />`;
+
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play loop="2">${baseUrl}/ring.wav</Play>
-  <Play loop="1">${baseUrl}/half-ring.wav</Play>
+  <Play loop="1">${baseUrl}/half-ring.wav</Play>${recordTag}
   <Start>
     <Stream url="${wsUrl}" codec="PCMU" bidirectionalMode="rtp" bidirectionalCodec="PCMU" bidirectionalSamplingRate="8000">
       <Parameter name="callerNumber" value="${from}" />
@@ -295,6 +304,106 @@ app.patch('/admin/memory', (req, res) => {
   Object.assign(mem[id], req.body);
   saveMem(mem);
   res.json({ updated: id, record: mem[id] });
+});
+
+// ─────────────────────────────────────────────
+// CALL RECORDING WEBHOOK — Telnyx posts here when a recording is ready
+// ─────────────────────────────────────────────
+// Telnyx <Record> recordingStatusCallback payload (TeXML, Twilio-compatible):
+//   RecordingUrl, RecordingSid, RecordingStatus, CallSid, RecordingDuration
+// We match CallSid → call_logs.telnyx_call_sid, store the URL, and send the
+// recording link to Telegram as a follow-up to the per-call summary message.
+app.post('/telnyx/recording', async (req, res) => {
+  res.sendStatus(200); // ack immediately — never make Telnyx wait or retry
+  try {
+    const b = req.body || {};
+    const callSid      = b.CallSid || b.call_control_id || b.call_sid || null;
+    const recordingUrl = b.RecordingUrl || b.recording_url ||
+                         (b.public_recording_urls && (b.public_recording_urls.mp3 || b.public_recording_urls.wav)) || null;
+    const status       = b.RecordingStatus || b.status || 'completed';
+    console.log(`[Telnyx] Recording webhook | CallSid: ${callSid} | status: ${status} | url: ${recordingUrl ? 'yes' : 'no'}`);
+    if (!callSid || !recordingUrl) return;
+
+    const { attachRecordingUrl } = require('./patientMemory');
+    const row = await attachRecordingUrl(callSid, recordingUrl);
+
+    const telegram = require('./telegramBot');
+    const base = process.env.PUBLIC_BASE_URL || '';
+    const key  = process.env.ADMIN_KEY || 'vicki2025';
+    const transcriptLink = (row?.id && base)
+      ? `${base.replace(/\/$/, '')}/calls/${row.id}?key=${encodeURIComponent(key)}`
+      : null;
+    const msg = [
+      `🎧 *Gravação pronta* — ${row?.patient_name || 'Desconhecido'} (${row?.caller_number || '?'})`,
+      `▶️ [Ouvir gravação](${recordingUrl})`,
+      transcriptLink ? `📄 [Ver transcrição](${transcriptLink})` : null,
+    ].filter(Boolean).join('\n');
+    telegram.notify(msg, { disable_web_page_preview: true }).catch(() => {});
+  } catch (e) {
+    console.error('[Telnyx] Recording webhook error:', e.message);
+  }
+});
+
+// ─────────────────────────────────────────────
+// CALL TRANSCRIPT VIEW — GET /calls/:id?key=ADMIN_KEY
+// ─────────────────────────────────────────────
+// Read-only HTML page rendering one call: outcome, summary, recording player,
+// and the full transcript. Gated by the shared ADMIN_KEY in the query string.
+app.get('/calls/:id', async (req, res) => {
+  if (req.query.key !== (process.env.ADMIN_KEY || 'vicki2025')) return res.status(403).send('Forbidden');
+  const db = require('./db');
+  if (!db.isEnabled()) return res.status(503).send('Database disabled');
+  let row;
+  try {
+    row = await db.one(`SELECT * FROM call_logs WHERE id=$1`, [req.params.id]);
+  } catch (e) { return res.status(500).send('DB error: ' + e.message); }
+  if (!row) return res.status(404).send('Call not found');
+
+  const esc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const transcript = Array.isArray(row.transcript) ? row.transcript : [];
+  const turns = transcript
+    .filter(m => m && m.content && (m.role === 'user' || m.role === 'assistant'))
+    .map(m => {
+      const who   = m.role === 'user' ? 'Paciente' : 'Vicki';
+      const cls   = m.role === 'user' ? 'user' : 'vicki';
+      return `<div class="turn ${cls}"><span class="who">${who}</span><div class="bubble">${esc(m.content)}</div></div>`;
+    }).join('\n');
+
+  const recording = row.recording_url
+    ? `<audio controls preload="none" src="${esc(row.recording_url)}" style="width:100%;margin:12px 0"></audio>
+       <p><a href="${esc(row.recording_url)}">Descarregar gravação</a></p>`
+    : `<p style="color:#888">Gravação ainda não disponível (ou desativada).</p>`;
+
+  res.type('html').send(`<!doctype html><html lang="pt"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chamada ${esc(row.id)} — ${esc(row.patient_name)}</title>
+<style>
+  body{font-family:system-ui,Segoe UI,Roboto,sans-serif;max-width:760px;margin:0 auto;padding:20px;color:#1a1a1a;background:#fafafa}
+  h1{font-size:20px;margin:0 0 4px} .meta{color:#555;font-size:14px;margin-bottom:8px}
+  .card{background:#fff;border:1px solid #e5e5e5;border-radius:10px;padding:16px;margin-bottom:16px}
+  .turn{margin:10px 0;display:flex;flex-direction:column}
+  .turn.user{align-items:flex-start}.turn.vicki{align-items:flex-end}
+  .who{font-size:11px;color:#888;margin-bottom:2px}
+  .bubble{padding:9px 13px;border-radius:14px;max-width:80%;white-space:pre-wrap;line-height:1.4}
+  .user .bubble{background:#eef1f4}.vicki .bubble{background:#1366ff;color:#fff}
+  .tag{display:inline-block;background:#eef1f4;border-radius:6px;padding:2px 8px;font-size:13px;margin-right:6px}
+</style></head><body>
+  <h1>${esc(row.patient_name)} — ${esc(row.caller_number)}</h1>
+  <div class="meta">${esc(row.created_at)} · ${esc(row.duration_seconds || 0)}s · ${esc(row.language || '?')}</div>
+  <div class="card">
+    <span class="tag">Resultado: ${esc(row.outcome || '?')}</span>
+    <span class="tag">Intenção: ${esc(row.intent || '?')}</span>
+    ${row.action_fired ? `<span class="tag">Ação: ${esc(row.action_fired)}</span>` : ''}
+    ${row.transferred_to_human ? `<span class="tag">→ Humano</span>` : ''}
+    ${row.summary ? `<p>${esc(row.summary)}</p>` : ''}
+    ${recording}
+  </div>
+  <div class="card">
+    <h1 style="font-size:16px">Transcrição</h1>
+    ${turns || '<p style="color:#888">Sem turnos de conversa.</p>'}
+  </div>
+</body></html>`);
 });
 
 

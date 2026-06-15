@@ -7,7 +7,7 @@ const { ElevenLabsClient }    = require('@elevenlabs/elevenlabs-js');
 const { processTurn, generateCallSummary } = require('./aiLogic');
 const cache         = require('./newsoftCache');
 const newsoft       = require('./newsoftApi');
-const { getPatientMemory, updateAfterCall, logCallOutcome } = require('./patientMemory');
+const { getPatientMemory, updateAfterCall, logCallOutcome, logCallTranscript } = require('./patientMemory');
 const { flushQueuedSMS } = require('./smsService');
 const telegram      = require('./telegramBot');
 
@@ -460,6 +460,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let pendingAppts        = [];
   let lastOfferedDate     = null;   // date of last slot shown — next search skips past it
   let bookingReasonText   = null;
+  let lastActionFired     = null;   // last real API action this call (book/cancel) — proof for the transcript log
   let returnToAgent       = null;   // agent to resume after info/insurance detour
   let returnContext       = {};     // saved pendingSlots + bookingReason for resume
   let languageState       = 'unknown';
@@ -513,6 +514,33 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       language: languageState === 'en' ? 'en' : 'pt',
     });
 
+  // ── Per-call Telegram summary with a transcript link ──────────────────────
+  // Fired once at hangup after the transcript row is persisted. The recording
+  // link arrives later (separate message) via the recording.saved webhook,
+  // because Telnyx only finishes the recording after the call ends.
+  const notifyCallSummary = (rowId, summary, durationSeconds) => {
+    try {
+      const base = process.env.PUBLIC_BASE_URL || '';
+      const key  = process.env.ADMIN_KEY || 'vicki2025';
+      const link = (rowId && base)
+        ? `${base.replace(/\/$/, '')}/calls/${rowId}?key=${encodeURIComponent(key)}`
+        : null;
+      const outcomeEmoji = { booked: '✅', cancelled: '❌', transferred: '👤', info: 'ℹ️', abandoned: '📭' }[summary.outcome] || '📞';
+      const mins = Math.floor((durationSeconds || 0) / 60), secs = (durationSeconds || 0) % 60;
+      const msg = [
+        `${outcomeEmoji} *Chamada terminada* — ${summary.outcome || 'concluída'}`,
+        `👤 ${patient?.patientName || 'Desconhecido'}`,
+        `📱 ${callerNumber || '?'}  ·  ⏱ ${mins}m${String(secs).padStart(2, '0')}`,
+        summary.summary ? `📝 ${summary.summary.slice(0, 200)}` : null,
+        link ? `📄 [Ver transcrição](${link})` : '📄 transcrição: DB indisponível',
+        `🎧 Gravação: a processar… (chega numa mensagem a seguir)`,
+      ].filter(Boolean).join('\n');
+      telegram.notify(msg, { disable_web_page_preview: true }).catch(() => {});
+    } catch (e) {
+      console.error('[Telegram] call summary notify failed:', e.message);
+    }
+  };
+
   const finishCallAfterAudio = (reason = 'final-farewell') => {
     if (callEnding) return true;
     callEnding = true;
@@ -546,6 +574,23 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           summary:            summary.summary,
           flags:              summary.flags || [],
         });
+        const spokenLang = (languageState === 'en' || languageState === 'pt') ? languageState : summary.language;
+        logCallTranscript({
+          patientId:          patient?.patientId || null,
+          patientName:        patient?.patientName || 'Unknown',
+          callerNumber,
+          outcome:            summary.outcome,
+          intent:             summary.intent,
+          transferredToHuman: currentAgent === 'human',
+          actionFired:        lastActionFired,
+          durationSeconds,
+          unclearTurns,
+          language:           spokenLang,
+          summary:            summary.summary,
+          flags:              summary.flags || [],
+          transcript:         conversationHistory,
+          telnyxCallSid:      callSid,
+        }).then(rowId => notifyCallSummary(rowId, summary, durationSeconds));
       })
       .catch(e => console.error('[Memory] Save error:', e.message));
 
@@ -995,6 +1040,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
       // ── Persistent audit: Telegram notification on every booking/cancel ──
       // Railway logs vanish on redeploy — Telegram gives a permanent record.
+      if (result.actionFired === 'book_appointment' || result.actionFired === 'cancel_appointment') {
+        lastActionFired = result.actionFired; // remember for the end-of-call transcript record
+      }
       if (result.actionFired === 'book_appointment' && result.action !== 'transfer_to_human') {
         const ptName = patient?.patientName || 'Novo paciente';
         const msg = [
@@ -1108,6 +1156,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
                 const spokenLang = (languageState === 'en' || languageState === 'pt') ? languageState : summary.language;
                 if (patient?.patientId) updateAfterCall(patient.patientId, { patientName: patient.patientName, summary: summary.summary, intent: summary.intent, language: spokenLang, explicitDoctorPreference: summary.explicitDoctorPreference, explicitTimePreference: summary.explicitTimePreference });
                 logCallOutcome({ patientId: patient?.patientId, patientName: patient?.patientName, callerNumber, outcome: summary.outcome, intent: summary.intent, transferredToHuman: false, unclearTurns, durationSeconds, summary: summary.summary, flags: summary.flags || [] });
+                logCallTranscript({ patientId: patient?.patientId || null, patientName: patient?.patientName || 'Unknown', callerNumber, outcome: summary.outcome, intent: summary.intent, transferredToHuman: false, actionFired: lastActionFired, durationSeconds, unclearTurns, language: spokenLang, summary: summary.summary, flags: summary.flags || [], transcript: conversationHistory, telnyxCallSid: callSid }).then(rowId => notifyCallSummary(rowId, summary, durationSeconds));
               }).catch(e => console.error('[Memory] Save error:', e.message));
             let waited2 = 0;
             const doHangup2 = () => { if (!isSpeaking || waited2 > 6000) { try { ws.close(); } catch (_) {} } else { waited2 += 200; setTimeout(doHangup2, 200); } };
@@ -1167,6 +1216,23 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
               summary:            summary.summary,
               flags:              summary.flags || [],
             });
+            // 3. Persist full transcript to DB (searchable, durable)
+            logCallTranscript({
+              patientId:          patient?.patientId || null,
+              patientName:        patient?.patientName || 'Unknown',
+              callerNumber,
+              outcome:            summary.outcome,
+              intent:             summary.intent,
+              transferredToHuman: currentAgent === 'human',
+              actionFired:        lastActionFired,
+              durationSeconds,
+              unclearTurns,
+              language:           spokenLang,
+              summary:            summary.summary,
+              flags:              summary.flags || [],
+              transcript:         conversationHistory,
+              telnyxCallSid:      callSid,
+            }).then(rowId => notifyCallSummary(rowId, summary, durationSeconds));
           })
           .catch(e => console.error('[Memory] Save error:', e.message));
 

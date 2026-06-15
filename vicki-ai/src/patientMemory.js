@@ -221,4 +221,81 @@ function logCallOutcome(entry) {
   }
 }
 
-module.exports = { getPatientMemory, updateAfterCall, buildMemoryContext, logCallOutcome };
+/**
+ * Persist a FULL call record (outcome + transcript) to Postgres.
+ *
+ * Fire-and-forget and fully guarded: if the DB is disabled or the write
+ * fails, the call is completely unaffected (the JSONL log + Telegram still
+ * give a record). This is the searchable, durable store for "what did Vicki
+ * say / did it actually book".
+ *
+ * ⚠️ PHI — transcript may contain patient details. The DB is the
+ * HIPAA-relevant store; ensure access is logged per HIPAA requirements.
+ *
+ * @param {object} entry
+ * @param {Array}  entry.transcript  - full conversationHistory ([{role, content}])
+ * @param {string} entry.actionFired - 'book_appointment'|'cancel_appointment'|null (proof a real action ran)
+ */
+async function logCallTranscript(entry) {
+  try {
+    const db = require('./db');
+    if (!db.isEnabled()) return null;
+    const row = await db.one(
+      `INSERT INTO call_logs
+         (clinic_id, newsoft_patient_id, patient_name, caller_number,
+          outcome, intent, transferred_to_human, action_fired,
+          duration_seconds, unclear_turns, language, summary, flags, transcript,
+          telnyx_call_sid)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15)
+       RETURNING id`,
+      [
+        entry.clinicId        || process.env.CLINIC_ID_SLUG || 'loule',
+        entry.patientId       != null ? String(entry.patientId) : null,
+        entry.patientName     || 'Unknown',
+        entry.callerNumber    || null,
+        entry.outcome         || null,
+        entry.intent          || 'general',
+        !!entry.transferredToHuman,
+        entry.actionFired     || null,
+        entry.durationSeconds || null,
+        entry.unclearTurns    || 0,
+        entry.language        || null,
+        entry.summary         || null,
+        JSON.stringify(entry.flags || []),
+        JSON.stringify(entry.transcript || []),
+        entry.telnyxCallSid   || null,
+      ]
+    );
+    console.log(`[Log] Call transcript persisted to DB (id=${row?.id})`);
+    return row?.id || null;
+  } catch (e) {
+    console.error('[Log] DB transcript write failed:', e.message);
+    return null;
+  }
+}
+
+/**
+ * Attach a recording URL to the call_logs row for a given Telnyx call sid.
+ * Called by the recording.saved webhook. Returns the updated row (id, links
+ * fields) so the caller can send a Telegram with the recording link, or null.
+ */
+async function attachRecordingUrl(telnyxCallSid, recordingUrl) {
+  try {
+    const db = require('./db');
+    if (!db.isEnabled() || !telnyxCallSid) return null;
+    const row = await db.one(
+      `UPDATE call_logs SET recording_url=$2
+         WHERE telnyx_call_sid=$1
+       RETURNING id, patient_name, caller_number, outcome`,
+      [telnyxCallSid, recordingUrl]
+    );
+    if (row) console.log(`[Log] Recording URL attached to call ${row.id}`);
+    else console.warn(`[Log] No call_logs row for telnyx sid ${telnyxCallSid} — recording orphaned`);
+    return row;
+  } catch (e) {
+    console.error('[Log] attachRecordingUrl failed:', e.message);
+    return null;
+  }
+}
+
+module.exports = { getPatientMemory, updateAfterCall, buildMemoryContext, logCallOutcome, logCallTranscript, attachRecordingUrl };

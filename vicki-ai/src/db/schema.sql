@@ -96,6 +96,41 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_wamid ON messages (wa_message_id) WHERE wa_message_id IS NOT NULL;
 
+-- ── Call logs (full inbound voice-call record) ─────────────
+-- One row per completed inbound call. Stores the outcome + the FULL
+-- transcript (conversationHistory) so calls are searchable and you can
+-- see exactly what Vicki and the patient said. Written fire-and-forget
+-- at hangup — never blocks or breaks a call. PHI: transcript may contain
+-- patient details — DB is the HIPAA-relevant store.
+CREATE TABLE IF NOT EXISTS call_logs (
+  id                   BIGSERIAL PRIMARY KEY,
+  clinic_id            TEXT,
+  newsoft_patient_id   TEXT,
+  patient_name         TEXT,
+  caller_number        TEXT,
+  outcome              TEXT,                 -- booked|cancelled|info|transferred|abandoned
+  intent               TEXT,
+  transferred_to_human BOOLEAN NOT NULL DEFAULT false,
+  action_fired         TEXT,                 -- book_appointment|cancel_appointment|null (proof a real action ran)
+  duration_seconds     INT,
+  unclear_turns        INT,
+  language             TEXT,
+  summary              TEXT,
+  flags                JSONB NOT NULL DEFAULT '[]',
+  transcript           JSONB NOT NULL DEFAULT '[]', -- full conversationHistory
+  telnyx_call_sid      TEXT,                 -- Telnyx call_control_id — links the recording webhook back to this row
+  recording_url        TEXT,                 -- filled in later by the recording.saved webhook
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_call_logs_when ON call_logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_call_logs_outcome ON call_logs (outcome);
+CREATE INDEX IF NOT EXISTS idx_call_logs_caller ON call_logs (caller_number);
+CREATE INDEX IF NOT EXISTS idx_call_logs_telnyx_sid ON call_logs (telnyx_call_sid);
+
+-- Safe re-run for DBs created before these columns existed.
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS telnyx_call_sid TEXT;
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS recording_url   TEXT;
+
 -- ── Reviews ────────────────────────────────────────────────
 -- Drives the hosted star-form gating flow.
 CREATE TABLE IF NOT EXISTS reviews (
