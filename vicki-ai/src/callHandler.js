@@ -510,6 +510,15 @@ function pcmuToLinear16(buf) {
 // HANDLE CALL
 // ─────────────────────────────────────────────
 async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls = new Map()) {
+  // Derive THIS app's own public base URL from the incoming WS upgrade request,
+  // so transcript links always point at the real running app — not a stale or
+  // wrong PUBLIC_BASE_URL (which had pointed at a different Railway service).
+  // Falls back to the env var, then empty.
+  const reqHost = req?.headers?.['x-forwarded-host'] || req?.headers?.host || null;
+  const selfBaseUrl = reqHost
+    ? `https://${reqHost}`
+    : (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+
   let callerNumber        = null;
   let callSid             = null;
   let patient             = null;
@@ -601,7 +610,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
   const notifyCallSummary = (rowId, summary, durationSeconds) => {
     try {
-      const base = process.env.PUBLIC_BASE_URL || '';
+      const base = selfBaseUrl || '';
       const key  = process.env.ADMIN_KEY || 'vicki2025';
       const link = (rowId && base)
         ? `${base.replace(/\/$/, '')}/calls/${rowId}?key=${encodeURIComponent(key)}`
@@ -1587,7 +1596,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           const { attachRecordingUrl } = require('./patientMemory');
           const row = await attachRecordingUrl(callSid, url);
           if (!row) return; // already attached by the webhook, or no row — no duplicate msg
-          const base = process.env.PUBLIC_BASE_URL || '';
+          const base = selfBaseUrl || '';
           const key  = process.env.ADMIN_KEY || 'vicki2025';
           const tLink = (row.id && base) ? `${base.replace(/\/$/, '')}/calls/${row.id}?key=${encodeURIComponent(key)}` : null;
           const msg = [
