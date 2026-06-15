@@ -1843,12 +1843,22 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
   if (!userText || userText === '[continua]') return null;
   const text = normalizeForIntent(userText);
 
-  const emergency = /\b(severe|terrible|unbearable|emergency|urgent\w*|urgency|toothache|abscess|swelling|bleeding|knocked out|broke|broken tooth|acidente|urgente|urgencia|dor forte|muita dor|inchaco|sangramento|abcesso|dente partido)\b/.test(text);
-  if (emergency && currentAgent !== 'emergency') {
+  // ── MANDATORY EMERGENCY TRANSFER ──────────────────────────────────────────
+  // Any pain/urgency signal → Vicki must IMMEDIATELY transfer to a human. She
+  // never books, never gives advice, never diagnoses. She only: acknowledges
+  // warmly, wishes them well, and tells them to stay on the line. This is a
+  // deterministic hard rule (not left to the LLM) and fires from ANY agent.
+  const emergency = /\b(pain|hurts?|hurting|aching|ache|severe|terrible|unbearable|emergency|urgent\w*|urgency|toothache|abscess|swelling|swollen|bleeding|knocked out|broke|broken tooth|dor|dores|doi|doer|a doer|magoa|magoado|severa|forte|emergencia|acidente|urgente|urgencia|dor forte|muita dor|inchaco|inchada|sangramento|sangra|abcesso|abscesso|dente partido|parti um dente|parti o dente)\b/.test(text);
+  if (emergency) {
     return {
-      speak: speakIn(languageState, 'Lamento muito, vamos tratar disso imediatamente.', "I'm sorry to hear that, we'll deal with this right away."),
-      action: 'transfer_to_emergency',
-      currentAgent: 'emergency',
+      speak: speakIn(
+        languageState,
+        'Lamento muito que esteja com dores. Compreendo perfeitamente. Vou passar já a chamada a um colega da nossa equipa para o ajudar de imediato — por favor fique na linha, estou a transferir agora. As melhoras!',
+        "I'm so sorry you're in pain — I completely understand. I'm going to connect you with a member of our team right away to help you. Please stay on the line, I'm transferring you now. I hope you feel better soon!"
+      ),
+      action: 'transfer_to_human',
+      currentAgent: 'human',
+      keepSpeak: true, // keep the empathetic pain message — don't replace with the generic transfer line
     };
   }
 
@@ -2154,7 +2164,9 @@ async function processTurn({
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
 
     if (transferOverride.action === 'transfer_to_human') {
-      const tSpeak = transferSpeak(patient, nextLanguageState);
+      // Emergency/pain transfers keep their own empathetic message (acknowledge +
+      // wish well + stay on the line). Other human transfers use the generic line.
+      const tSpeak = transferOverride.keepSpeak ? transferOverride.speak : transferSpeak(patient, nextLanguageState);
       history.push({ role: 'assistant', content: JSON.stringify({ ...parsed, speak: tSpeak }) });
       return finalize({
         speak: tSpeak,
@@ -2612,6 +2624,29 @@ async function processTurn({
         speak = 'Um momento — a confirmar o cancelamento.';
         parsed.speak = speak;
       }
+    }
+  }
+
+  // ── HARD GUARD: emergency agent MUST only transfer — never book/check/advise ──
+  // If the call is in the emergency agent, any action other than a transfer or a
+  // farewell is forced to transfer_to_human with the empathetic message. Vicki
+  // never books a slot or gives clinical advice for pain/urgency.
+  if (
+    currentAgent === 'emergency' &&
+    action !== 'transfer_to_human' &&
+    action !== 'transfer_to_info' &&
+    action !== 'hangup'
+  ) {
+    console.warn(`[Guard] Emergency agent action "${action}" overridden → transfer_to_human (pain = mandatory transfer)`);
+    action = 'transfer_to_human';
+    parsed.action = action;
+    if (!/lamento|sorry|dores|pain|melhoras|feel better|linha|line/i.test(speak || '')) {
+      speak = speakIn(
+        languageState,
+        'Lamento muito que esteja com dores. Compreendo perfeitamente. Vou passar já a chamada a um colega da nossa equipa para o ajudar — fique na linha, por favor. As melhoras!',
+        "I'm so sorry you're in pain — I completely understand. I'm connecting you with a member of our team right away. Please stay on the line. I hope you feel better soon!"
+      );
+      parsed.speak = speak;
     }
   }
 
