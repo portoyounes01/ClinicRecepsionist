@@ -26,6 +26,21 @@ const CLINIC_NIF   = process.env.NEWSOFT_CLINIC_NIF;
 const CLINIC_ID    = parseInt(process.env.NEWSOFT_CLINIC_ID);
 const COST_CENTER_ID = parseInt(process.env.NEWSOFT_COST_CENTER_ID);
 
+// ── Hard-excluded doctors ────────────────────────────────────
+// medicIds that Vicki must NEVER look up, offer as a slot, or book.
+// Filtered here at the single source so the exclusion propagates to slots,
+// specialty resolution, STT context and every prompt automatically.
+// Default: 25 = Dr. Hugo Almeida. Override/extend via EXCLUDED_MEDIC_IDS="25,99".
+const EXCLUDED_MEDIC_IDS = new Set(
+  (process.env.EXCLUDED_MEDIC_IDS || '25')
+    .split(',')
+    .map(s => parseInt(String(s).trim(), 10))
+    .filter(n => Number.isFinite(n))
+);
+function isExcludedDoctor(m) {
+  return EXCLUDED_MEDIC_IDS.has(Number(m?.medicId));
+}
+
 // ─── In-memory copy (read from file on first access) ────────
 let _cache = null;
 
@@ -93,7 +108,9 @@ async function getDoctors() {
   const age = now - (_cache.doctorsCachedAt || 0);
 
   if (_cache.doctors && age < DOCTOR_TTL) {
-    return _cache.doctors; // still fresh
+    // Filter on read too, so a cache written before the exclusion list existed
+    // still never returns an excluded doctor (no 24h wait for the refresh).
+    return _cache.doctors.filter(m => !isExcludedDoctor(m));
   }
 
   console.log('[Cache] Doctors stale or missing — fetching from Newsoft...');
@@ -106,7 +123,12 @@ async function getDoctors() {
   const all = res.data || [];
   const doctors = all.filter(m => {
     const name = (m.medicName || '').toLowerCase();
-    return !name.includes('atendimento') && !name.includes('agenda');
+    if (name.includes('atendimento') || name.includes('agenda')) return false;
+    if (isExcludedDoctor(m)) {
+      console.log(`[Cache] Excluding doctor medicId=${m.medicId} (${m.medicName || m.medicShortName || '?'}) — hard-blocked`);
+      return false;
+    }
+    return true;
   });
 
   _cache.doctors        = doctors;

@@ -15,7 +15,16 @@ const COST_CENTER_ID = parseInt(process.env.NEWSOFT_COST_CENTER_ID);
 // Only real doctors at Loulé — excludes reception/admin entries like 'Atendimento Margarida'
 // NOTE: Dra. Aline Marodin (32, aesthetic medicine) is NOT here — she only works
 // at the Quarteira clinic, so she is never offered/booked on this Loulé line.
-const LOULE_DOCTOR_IDS = new Set([1, 3, 11, 13, 25, 33, 36, 39]);
+const LOULE_DOCTOR_IDS = new Set([1, 3, 11, 13, 33, 36, 39]); // 25 (Hugo Almeida) hard-excluded — never offered/booked
+
+// Hard-excluded doctors — Vicki must NEVER look up, offer a slot for, or book.
+// Default 25 = Dr. Hugo Almeida. Keep in sync with newsoftCache EXCLUDED_MEDIC_IDS.
+const EXCLUDED_MEDIC_IDS = new Set(
+  (process.env.EXCLUDED_MEDIC_IDS || '25')
+    .split(',')
+    .map(s => parseInt(String(s).trim(), 10))
+    .filter(n => Number.isFinite(n))
+);
 
 function authHeader(token) {
   return { Authorization: `Bearer ${token}` };
@@ -154,6 +163,13 @@ async function createOrUpdatePatient({ patientName, phoneNumber, patientEmail, p
 // AVAILABILITY: Get available slots for a doctor
 // ─────────────────────────────────────────────
 async function getAvailableSlots({ medicId, motiveId, dateFrom, dateTo }) {
+  // Hard block: never query an excluded doctor's calendar, even if something
+  // upstream resolved their medicId. Return no slots immediately.
+  if (medicId && EXCLUDED_MEDIC_IDS.has(Number(medicId))) {
+    console.warn(`[Newsoft] getAvailableSlots BLOCKED for excluded medicId=${medicId} — returning no slots`);
+    return [];
+  }
+
   const token = await cache.getToken();
 
   const from = dateFrom.split('T')[0];
@@ -175,10 +191,13 @@ async function getAvailableSlots({ medicId, motiveId, dateFrom, dateTo }) {
       params,
     });
     const slots = res.data || [];
-    // Filter out non-doctor entries (reception, admin, etc.) unless a specific medicId was requested
+    // ALWAYS strip excluded doctors from results (belt-and-suspenders, even when a
+    // specific medicId was requested). Then, for the all-doctors case, keep only
+    // real Loulé doctors (excludes reception/admin entries).
+    const noExcluded = slots.filter(s => !EXCLUDED_MEDIC_IDS.has(Number(s.medicId)));
     return medicId
-      ? slots
-      : slots.filter(s => LOULE_DOCTOR_IDS.has(s.medicId));
+      ? noExcluded
+      : noExcluded.filter(s => LOULE_DOCTOR_IDS.has(s.medicId));
   } catch (err) {
     console.error('[Newsoft] getAvailableSlots error:', JSON.stringify(err.response?.data));
     throw err;
