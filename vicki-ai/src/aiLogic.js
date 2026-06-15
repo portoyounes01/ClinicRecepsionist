@@ -2463,8 +2463,10 @@ async function processTurn({
     // CRITICAL: confirmation must come from the PATIENT, never from Vicki's own
     // "está marcado" speak — otherwise she books when the patient never agreed.
     const prevSpeak   = lastAssistantSpeak(history);
-    const askedToBook = /quer que (eu )?marque|posso marcar|book your appointment|shall i book|confirma que quer marcar|quer que marque essa|entao quer que marque|então quer que marque/i.test(prevSpeak || '');
-    const plainYes    = /^(sim|claro|certo|exato|isso|pode|pode ser|por favor|okay|ok|yes|yeah|yep|sure)\b/.test(normalizeForIntent(userText));
+    const askedToBook = /quer que (eu )?marque|posso marcar|book your appointment|shall i book|confirma que quer marcar|quer que marque essa|entao quer que marque|então quer que marque|just to confirm.*book/i.test(prevSpeak || '');
+    // Broadened affirmatives — "sim, por favor", "pode marcar", "vamos a isso",
+    // "confirmo", a bare "marca/marque", etc. all count as a yes after Vicki asked.
+    const plainYes    = /^(sim|claro|certo|exato|exacto|isso|pois|pode|pode ser|pode marcar|por favor|marca|marque|confirmo|quero|vamos|avanc|okay|ok|yes|yeah|yep|sure|go ahead|please do)\b/.test(normalizeForIntent(userText));
     const patientConfirmedExplicitly = isExplicitBookingConfirmation(userText);
     // A bare "yes/sim" only counts if Vicki actually asked to book on the previous turn.
     const confirmed   = patientConfirmedExplicitly || (askedToBook && plainYes);
@@ -2491,7 +2493,26 @@ async function processTurn({
         bookingReasonText: updatedBookingReasonText,
       });
     }
-    // confirmed → fall through to the FORCE-book guard below, which books.
+    // confirmed → book NOW directly. Previously this fell through to the second
+    // FORCE-book guard, whose stricter re-evaluation could disagree and instead
+    // re-ask the SAME confirmation — making Vicki repeat "Então quer que marque…"
+    // two or three times before booking. Booking here guarantees one yes → one book.
+    const latestPeriod = inferLatestExplicitPeriodFromUser(history, params);
+    let inferredPeriod = latestPeriod?.period || params.chosenPeriod || null;
+    if (!inferredPeriod) {
+      const recentAll = history.slice(-6).map(m => m.content || '').join(' ').toLowerCase();
+      const isTarde = /\btarde\b|\bafternoon\b|\b1[4-9]h|\b1[4-9]:\d\d/.test(recentAll);
+      const isManha = /\bmanh[aã]\b|\bmorning\b|\b[89]h|\b1[0-2]h|\b[89]:\d\d|\b1[0-2]:\d\d/.test(recentAll);
+      if (isTarde && !isManha) inferredPeriod = 'tarde';
+      else if (isManha && !isTarde) inferredPeriod = 'manhã';
+      else if (isTarde) inferredPeriod = 'tarde';
+    }
+    console.log(`[Guard] CONFIRMED → book_appointment now (one yes → one book). ID: ${patient.patientId}, inferredPeriod: ${inferredPeriod || '(unknown)'}`);
+    action = 'book_appointment';
+    params = { ...params, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText };
+    if (inferredPeriod) params.chosenPeriod = inferredPeriod;
+    parsed.action = action;
+    parsed.params = params;
   }
 
   // If pendingSlots + known patient + patient confirmed → MUST book before anything else.
@@ -2561,6 +2582,39 @@ async function processTurn({
     }
   }
 
+  // ── HARD GUARD: FORCE cancel_appointment when the patient confirms a cancel ──
+  // Mirrors the FORCE book_appointment guard. Without it, the AI sometimes
+  // returned action="none" after the patient said "sim" to cancelling, so the
+  // cancel silently never fired (and could fall into the re-fetch loop). Only
+  // fires when: appointments agent, we HAVE the appointment(s) loaded, Vicki
+  // ASKED to cancel on the previous turn, and the patient is clearly confirming.
+  if (
+    currentAgent === 'appointments' &&
+    (action === 'none' || action === 'hangup') &&
+    pendingAppts?.length > 0 &&
+    patient?.patientId
+  ) {
+    const textLower = (userText || '').toLowerCase();
+    const isConfirmText = /^(sim|ok|okay|claro|pode|por favor|confirmo|exato|certo|quero|isso|pois|cancele?|cancela|sim por favor)\b/i.test(textLower)
+      || /\b(pode cancelar|sim cancele|quero cancelar|confirmo o cancelamento)\b/i.test(textLower);
+    const isRejectionOrQuestion = /\?/.test(userText || '')
+      || /\b(n[aã]o|nao|nope|not|don'?t|wait|espera|deixa|afinal|na verdade|mud[ae]|change)\b/i.test(textLower);
+    const prevSpeak = lastAssistantSpeak(history);
+    const vickiOfferedToCancel = /quer que (eu )?cancele|posso cancelar|confirma.{0,20}cancel|cancel(ar)? (a|essa|esta) consulta|shall i cancel|cancel this appointment|cancel that appointment/i.test(prevSpeak || '');
+
+    if (isConfirmText && vickiOfferedToCancel && !isRejectionOrQuestion) {
+      console.log(`[Guard] FORCE cancel_appointment — action was "${action}", appts loaded, patient confirmed. ID: ${patient.patientId}`);
+      action = 'cancel_appointment';
+      params = { ...params, _pendingAppts: pendingAppts };
+      parsed.action = action;
+      parsed.params = params;
+      if (/adeus|até logo|obrigad/i.test(speak || '')) {
+        speak = 'Um momento — a confirmar o cancelamento.';
+        parsed.speak = speak;
+      }
+    }
+  }
+
   // ── HARD GUARD: appointments agent MUST call get_appointments before speaking any data ──
   // This prevents the AI from hallucinating appointment info from call memory.
   // Rule: if appointments agent tries to speak (action=none) but we have no real API data
@@ -2573,6 +2627,12 @@ async function processTurn({
   ) {
     // Check if get_appointments has already been called in this session (look in history)
     const apptFetched = history.some(m => {
+      // The preserved "Consultas do paciente:" system message survives history
+      // trimming (it's in criticalKeywords) and proves appointments were loaded.
+      // Without this check, after a trim the guard wrongly re-fetched mid-cancel
+      // — and the second fetch sometimes returned empty, poisoning the whole call
+      // ("Neste momento não tem nenhuma consulta agendada" → stuck loop).
+      if (m.role === 'system' && typeof m.content === 'string' && m.content.includes('Consultas do paciente')) return true;
       try {
         const p = JSON.parse(m.content);
         return p.action === 'get_appointments';

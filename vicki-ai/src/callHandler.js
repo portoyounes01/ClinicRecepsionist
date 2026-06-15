@@ -1304,10 +1304,13 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         const durationSeconds = Math.round((Date.now() - callStartTime) / 1000);
         generateCallSummary(conversationHistory, patient)
           .then(summary => {
+            // Prefer the language actually spoken this call over the summary guess.
+            // Hoisted here so the transcript log below can also use it (was scoped
+            // inside the if-block, which crashed the whole save with
+            // "spokenLang is not defined" → transcript never saved, recording orphaned).
+            const spokenLang = (languageState === 'en' || languageState === 'pt') ? languageState : summary.language;
             // 1. Update patient memory (only explicitly stated preferences)
             if (patient?.patientId) {
-              // Prefer the language actually spoken this call over the summary guess.
-              const spokenLang = (languageState === 'en' || languageState === 'pt') ? languageState : summary.language;
               updateAfterCall(patient.patientId, {
                 patientName:              patient.patientName,
                 summary:                  summary.summary,
