@@ -911,6 +911,19 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       let speakStarted  = false;
       let patienceTimer = null;
       let patienceFired = false;
+      let fillerPlaying = false;  // true while the patience filler audio is on the line
+
+      // Stop the patience filler if it's currently playing, so the real answer
+      // never overlaps it ("two Vickis"). Safe to call when nothing is playing.
+      const stopFillerIfPlaying = async () => {
+        if (fillerPlaying && currentAbort) {
+          currentAbort('patience-filler-superseded');
+          currentAbort = null;
+          fillerPlaying = false;
+          // brief gap so the Telnyx 'clear' lands before new audio starts
+          await new Promise(r => setTimeout(r, 120));
+        }
+      };
 
     try {
       let bridgeDone      = null;
@@ -947,7 +960,11 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           patienceFired = true;
           const filler = PATIENCE_FILLERS[Math.floor(Date.now() / 1000) % PATIENCE_FILLERS.length];
           console.log(`[TTS] Patience filler: "${filler}"`);
-          speakToCaller(filler, () => {});
+          // Register the filler's abort on currentAbort so the real answer can
+          // stop it cleanly — otherwise the filler and the answer play at the
+          // same time ("two Vickis"). The result-speak paths below abort it.
+          speakToCaller(filler, () => { fillerPlaying = false; });
+          fillerPlaying = true;
         }
       }, 2500); // fire sooner so callers don't sit in dead air on slow first-token (2-3s) responses
 
@@ -1029,6 +1046,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       }
 
       // ── Speak the response ───────────────────────────────────────────
+      // If the patience filler is still on the line, stop it first so the real
+      // answer never plays on top of it ("two Vickis").
+      await stopFillerIfPlaying();
+
       if (result.actionFired && result.speak) {
         const isSlotResult = result.actionFired === 'check_slots';
         if (isSlotResult && speakStarted) {
