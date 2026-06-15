@@ -138,19 +138,16 @@ app.post('/telnyx/inbound', (req, res) => {
   console.log(`[Telnyx] Streaming audio to: ${wsUrl}`);
 
   // Ring 1+2 full (6s), ring 3 tone-only (1s) → stream starts mid-ring like a human pickup
-  // Record the whole call (both legs). Telnyx stores the audio and POSTs
-  // /telnyx/recording with a recording URL once the call ends — we attach
-  // that URL to the call_logs row and send the recording link to Telegram.
-  // ⚠️ PHI — Telnyx default storage is NOT covered by a HIPAA BAA. Move to
-  // your own S3 (or sign a Telnyx BAA) before handling real patient calls.
-  // TODO: verify <Record> recordingStatusCallback fires for TeXML stream calls in production.
-  const recordTag = process.env.CALL_RECORDING === 'off' ? '' :
-    `\n  <Record recordingStatusCallback="${baseUrl}/telnyx/recording" recordingStatusCallbackMethod="POST" recordingChannels="dual" recordingTrack="both" playBeep="false" maxLength="1800" />`;
+  // NOTE: do NOT use the inline <Record> TeXML verb here. It is blocking/terminal
+  // — it takes over the call and waits for the recording to end, so execution never
+  // reaches <Start><Stream> and Vicki goes silent. Recording is started instead via
+  // the non-blocking Call Control API (record_start) once the media stream connects
+  // — see startTelnyxRecording() in callHandler.js. Disable with CALL_RECORDING=off.
 
   res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Play loop="2">${baseUrl}/ring.wav</Play>
-  <Play loop="1">${baseUrl}/half-ring.wav</Play>${recordTag}
+  <Play loop="1">${baseUrl}/half-ring.wav</Play>
   <Start>
     <Stream url="${wsUrl}" codec="PCMU" bidirectionalMode="rtp" bidirectionalCodec="PCMU" bidirectionalSamplingRate="8000">
       <Parameter name="callerNumber" value="${from}" />

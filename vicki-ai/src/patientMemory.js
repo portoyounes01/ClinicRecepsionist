@@ -283,15 +283,23 @@ async function attachRecordingUrl(telnyxCallSid, recordingUrl) {
   try {
     const db = require('./db');
     if (!db.isEnabled() || !telnyxCallSid) return null;
-    const row = await db.one(
-      `UPDATE call_logs SET recording_url=$2
-         WHERE telnyx_call_sid=$1
-       RETURNING id, patient_name, caller_number, outcome`,
-      [telnyxCallSid, recordingUrl]
-    );
-    if (row) console.log(`[Log] Recording URL attached to call ${row.id}`);
-    else console.warn(`[Log] No call_logs row for telnyx sid ${telnyxCallSid} — recording orphaned`);
-    return row;
+    // Race: the recording.saved webhook can land before the transcript row is
+    // written (the row is saved async at hangup, after the summary LLM call).
+    // Retry a few times with backoff so the URL still lands on the right row.
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const delays = [0, 1500, 3000, 5000, 8000];
+    for (let i = 0; i < delays.length; i++) {
+      if (delays[i]) await sleep(delays[i]);
+      const row = await db.one(
+        `UPDATE call_logs SET recording_url=$2
+           WHERE telnyx_call_sid=$1
+         RETURNING id, patient_name, caller_number, outcome`,
+        [telnyxCallSid, recordingUrl]
+      );
+      if (row) { console.log(`[Log] Recording URL attached to call ${row.id} (try ${i + 1})`); return row; }
+    }
+    console.warn(`[Log] No call_logs row for telnyx sid ${telnyxCallSid} after retries — recording orphaned`);
+    return null;
   } catch (e) {
     console.error('[Log] attachRecordingUrl failed:', e.message);
     return null;

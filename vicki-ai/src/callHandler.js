@@ -52,6 +52,43 @@ function terminateTelnyxCall(callControlId) {
   });
 }
 
+// ─────────────────────────────────────────────
+// Start recording via the Telnyx Call Control API (NON-blocking).
+// Unlike the inline <Record> TeXML verb (which is terminal and stops the call
+// from ever reaching <Start><Stream> — leaving Vicki mute), record_start runs
+// alongside the live media stream. Telnyx POSTs the recording.saved webhook to
+// /telnyx/recording when the call ends. Best-effort: never blocks the call.
+// Docs: POST /v2/calls/{id}/actions/record_start  (channels: dual|single, format: mp3|wav)
+function startTelnyxRecording(callControlId) {
+  return new Promise((resolve) => {
+    if (process.env.CALL_RECORDING === 'off') return resolve(false);
+    if (!callControlId || !process.env.TELNYX_API_KEY) return resolve(false);
+    const payload = JSON.stringify({ format: 'mp3', channels: 'dual' });
+    const options = {
+      hostname: 'api.telnyx.com',
+      path:     `/v2/calls/${encodeURIComponent(callControlId)}/actions/record_start`,
+      method:   'POST',
+      headers: {
+        Authorization:    `Bearer ${process.env.TELNYX_API_KEY}`,
+        'Content-Type':   'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    };
+    const req = require('https').request(options, (res) => {
+      let data = '';
+      res.on('data', d => { data += d; });
+      res.on('end', () => {
+        console.log(`[Telnyx] record_start → ${res.statusCode}`);
+        if (res.statusCode < 200 || res.statusCode >= 300) console.error('[Telnyx] record_start body:', data.slice(0, 200));
+        resolve(res.statusCode >= 200 && res.statusCode < 300);
+      });
+    });
+    req.on('error', e => { console.error('[Telnyx] record_start error:', e.message); resolve(false); });
+    req.write(payload);
+    req.end();
+  });
+}
+
 const CLINIC_INFO = {
   name:     process.env.CLINIC_NAME,
   location: process.env.CLINIC_LOCATION,
@@ -1301,6 +1338,11 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           telnyxMediaEncoding = String(msg.start?.media_format?.encoding || 'PCMU').toUpperCase();
           console.log(`[Telnyx] Media format: ${telnyxMediaEncoding} ${msg.start?.media_format?.sample_rate || 8000}Hz`);
           console.log(`[Call] Started. Caller: ${callerNumber} | SID: ${callSid}`);
+
+          // Start call recording (non-blocking) now that the stream is live.
+          // The recording.saved webhook (/telnyx/recording) attaches the URL to
+          // the call_logs row at hangup. CALL_RECORDING=off disables it.
+          if (callSid) startTelnyxRecording(callSid);
 
           // ── Look up patient name BEFORE speaking ─────────────────────────────────
           // Race: lookup vs initial ring delay.
