@@ -89,6 +89,43 @@ function startTelnyxRecording(callControlId) {
   });
 }
 
+// Fallback: fetch the recording for a call directly from the Telnyx API a few
+// seconds after hangup, in case the call.recording.saved webhook isn't delivered
+// (connection webhook URL not configured). Returns an mp3/wav URL or null.
+// Docs: GET /v2/recordings?filter[call_session_id]=... (or call_control_id).
+function fetchTelnyxRecordingUrl(callControlId) {
+  return new Promise((resolve) => {
+    if (process.env.CALL_RECORDING === 'off') return resolve(null);
+    if (!callControlId || !process.env.TELNYX_API_KEY) return resolve(null);
+    const path = `/v2/recordings?filter[call_control_id]=${encodeURIComponent(callControlId)}`;
+    const options = {
+      hostname: 'api.telnyx.com',
+      path,
+      method: 'GET',
+      headers: { Authorization: `Bearer ${process.env.TELNYX_API_KEY}` },
+    };
+    const req = require('https').request(options, (res) => {
+      let data = '';
+      res.on('data', d => { data += d; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data || '{}');
+          const rec  = Array.isArray(json.data) ? json.data[0] : null;
+          const urls = rec?.download_urls || rec?.recording_urls || rec?.public_recording_urls || {};
+          const url  = urls.mp3 || urls.wav || null;
+          console.log(`[Telnyx] recordings API → ${res.statusCode} | found: ${url ? 'yes' : 'no'}`);
+          resolve(url);
+        } catch (e) {
+          console.error('[Telnyx] recordings API parse error:', e.message);
+          resolve(null);
+        }
+      });
+    });
+    req.on('error', e => { console.error('[Telnyx] recordings API error:', e.message); resolve(null); });
+    req.end();
+  });
+}
+
 const CLINIC_INFO = {
   name:     process.env.CLINIC_NAME,
   location: process.env.CLINIC_LOCATION,
@@ -556,6 +593,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   // Fired once at hangup after the transcript row is persisted. The recording
   // link arrives later (separate message) via the recording.saved webhook,
   // because Telnyx only finishes the recording after the call ends.
+  // HTML escape — Telegram HTML parse_mode is far more robust than Markdown for
+  // dynamic text + links (patient names / summaries often contain _ * [ ] ( ) (
+  // which break Markdown entity parsing and silently drop the whole message).
+  const esc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
   const notifyCallSummary = (rowId, summary, durationSeconds) => {
     try {
       const base = process.env.PUBLIC_BASE_URL || '';
@@ -566,14 +609,14 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       const outcomeEmoji = { booked: '✅', cancelled: '❌', transferred: '👤', info: 'ℹ️', abandoned: '📭' }[summary.outcome] || '📞';
       const mins = Math.floor((durationSeconds || 0) / 60), secs = (durationSeconds || 0) % 60;
       const msg = [
-        `${outcomeEmoji} *Chamada terminada* — ${summary.outcome || 'concluída'}`,
-        `👤 ${patient?.patientName || 'Desconhecido'}`,
-        `📱 ${callerNumber || '?'}  ·  ⏱ ${mins}m${String(secs).padStart(2, '0')}`,
-        summary.summary ? `📝 ${summary.summary.slice(0, 200)}` : null,
-        link ? `📄 [Ver transcrição](${link})` : '📄 transcrição: DB indisponível',
+        `${outcomeEmoji} <b>Chamada terminada</b> — ${esc(summary.outcome || 'concluída')}`,
+        `👤 ${esc(patient?.patientName || 'Desconhecido')}`,
+        `📱 ${esc(callerNumber || '?')}  ·  ⏱ ${mins}m${String(secs).padStart(2, '0')}`,
+        summary.summary ? `📝 ${esc(summary.summary.slice(0, 200))}` : null,
+        link ? `📄 <a href="${esc(link)}">Ver transcrição</a>` : '📄 transcrição: DB indisponível',
         `🎧 Gravação: a processar… (chega numa mensagem a seguir)`,
       ].filter(Boolean).join('\n');
-      telegram.notify(msg, { disable_web_page_preview: true }).catch(() => {});
+      telegram.notify(msg, { parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
     } catch (e) {
       console.error('[Telegram] call summary notify failed:', e.message);
     }
@@ -1528,6 +1571,35 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           }).then(rowId => notifyCallSummary(rowId, summary, durationSeconds));
         })
         .catch(e => console.error('[Memory] close-save error:', e.message));
+    }
+
+    // ── Recording fallback (API poll) ────────────────────────────────────────
+    // If the call.recording.saved webhook isn't delivered (connection webhook URL
+    // not pointed at us), fetch the recording from the Telnyx API ~10s after the
+    // call ends and attach it + send the Telegram link. attachRecordingUrl is
+    // idempotent on the row, and the webhook path (if it DOES fire) wins the race
+    // harmlessly — whichever lands first sets the URL.
+    if (callSid && process.env.CALL_RECORDING !== 'off') {
+      setTimeout(async () => {
+        try {
+          const url = await fetchTelnyxRecordingUrl(callSid);
+          if (!url) { console.warn(`[Telnyx] No recording found via API for ${callSid}`); return; }
+          const { attachRecordingUrl } = require('./patientMemory');
+          const row = await attachRecordingUrl(callSid, url);
+          if (!row) return; // already attached by the webhook, or no row — no duplicate msg
+          const base = process.env.PUBLIC_BASE_URL || '';
+          const key  = process.env.ADMIN_KEY || 'vicki2025';
+          const tLink = (row.id && base) ? `${base.replace(/\/$/, '')}/calls/${row.id}?key=${encodeURIComponent(key)}` : null;
+          const msg = [
+            `🎧 <b>Gravação pronta</b> — ${esc(row.patient_name || 'Desconhecido')} (${esc(row.caller_number || '?')})`,
+            `▶️ <a href="${esc(url)}">Ouvir gravação</a>`,
+            tLink ? `📄 <a href="${esc(tLink)}">Ver transcrição</a>` : null,
+          ].filter(Boolean).join('\n');
+          telegram.notify(msg, { parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
+        } catch (e) {
+          console.error('[Telnyx] recording fallback error:', e.message);
+        }
+      }, 10000);
     }
   });
 

@@ -290,13 +290,20 @@ async function attachRecordingUrl(telnyxCallSid, recordingUrl) {
     const delays = [0, 1500, 3000, 5000, 8000];
     for (let i = 0; i < delays.length; i++) {
       if (delays[i]) await sleep(delays[i]);
+      // Only set the URL on a row that doesn't already have one. This makes the
+      // call idempotent: whichever source (webhook OR API fallback) lands first
+      // sets it and gets the row back (→ sends the Telegram); the second lands a
+      // no-op (no row returned → no duplicate message).
       const row = await db.one(
         `UPDATE call_logs SET recording_url=$2
-           WHERE telnyx_call_sid=$1
+           WHERE telnyx_call_sid=$1 AND recording_url IS NULL
          RETURNING id, patient_name, caller_number, outcome`,
         [telnyxCallSid, recordingUrl]
       );
       if (row) { console.log(`[Log] Recording URL attached to call ${row.id} (try ${i + 1})`); return row; }
+      // Row exists but already has a URL → someone else won; stop retrying.
+      const exists = await db.one(`SELECT 1 AS x FROM call_logs WHERE telnyx_call_sid=$1`, [telnyxCallSid]);
+      if (exists) { console.log(`[Log] Recording already attached for ${telnyxCallSid} — skipping duplicate`); return null; }
     }
     console.warn(`[Log] No call_logs row for telnyx sid ${telnyxCallSid} after retries — recording orphaned`);
     return null;

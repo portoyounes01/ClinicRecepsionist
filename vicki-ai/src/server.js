@@ -349,15 +349,16 @@ async function handleRecordingEvent(body, res) {
     const telegram = require('./telegramBot');
     const base = process.env.PUBLIC_BASE_URL || '';
     const key  = process.env.ADMIN_KEY || 'vicki2025';
+    const esc  = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const transcriptLink = (row?.id && base)
       ? `${base.replace(/\/$/, '')}/calls/${row.id}?key=${encodeURIComponent(key)}`
       : null;
     const msg = [
-      `🎧 *Gravação pronta* — ${row?.patient_name || 'Desconhecido'} (${row?.caller_number || '?'})`,
-      `▶️ [Ouvir gravação](${recordingUrl})`,
-      transcriptLink ? `📄 [Ver transcrição](${transcriptLink})` : null,
+      `🎧 <b>Gravação pronta</b> — ${esc(row?.patient_name || 'Desconhecido')} (${esc(row?.caller_number || '?')})`,
+      `▶️ <a href="${esc(recordingUrl)}">Ouvir gravação</a>`,
+      transcriptLink ? `📄 <a href="${esc(transcriptLink)}">Ver transcrição</a>` : null,
     ].filter(Boolean).join('\n');
-    telegram.notify(msg, { disable_web_page_preview: true }).catch(() => {});
+    telegram.notify(msg, { parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
   } catch (e) {
     console.error('[Telnyx] Recording event error:', e.message);
   }
