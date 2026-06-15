@@ -511,6 +511,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
   let callEnding          = false;      // prevents double-hangup
+  let transcriptSaved     = false;      // ensures the transcript+Telegram save runs exactly once
   let loudPackets         = 0;          // consecutive loud audio packets (for audio barge-in)
   let speechSeq           = 0;
   const playbackDoneHandlers = new Map();
@@ -581,6 +582,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   const finishCallAfterAudio = (reason = 'final-farewell') => {
     if (callEnding) return true;
     callEnding = true;
+    transcriptSaved = true; // this path saves the transcript — block the close-handler catch-all
     clearTimeout(maxDurationWatchdog);
     clearInterval(silenceWatchdog);
     console.log(`[Call] Ending after ${reason}`);
@@ -1203,6 +1205,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           }
           if (autoResult.action === 'hangup' && !callEnding) {
             callEnding = true;
+            transcriptSaved = true; // this path saves the transcript — block the close-handler catch-all
             clearTimeout(maxDurationWatchdog);
             clearInterval(silenceWatchdog);
             const durationSeconds = Math.round((Date.now() - callStartTime) / 1000);
@@ -1240,6 +1243,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       if (result.action === 'hangup') {
         if (callEnding) return; // already ending
         callEnding = true;
+        transcriptSaved = true; // this path saves the transcript — block the close-handler catch-all
         clearTimeout(maxDurationWatchdog);
         clearInterval(silenceWatchdog);
         console.log('[Call] AI requested hangup — closing stream');
@@ -1489,6 +1493,42 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
     // Now that the call is fully disconnected, send any SMS we deferred so it
     // never competed with the live audio stream.
     flushQueuedSMS(callerNumber).catch(e => console.error('[SMS] flush on close failed:', e.message));
+
+    // ── Catch-all transcript save for CALLER-initiated hangups ──────────────
+    // The 3 Vicki-initiated endings already persist the transcript + fire the
+    // Telegram summary. But when the CALLER hangs up, the WS just closes here
+    // and none of those ran — so the call never reached the DB and no Telegram
+    // link was sent. Save it now, guarded by transcriptSaved so we never double
+    // up with a path that already ran. Fire-and-forget; never blocks teardown.
+    if (!transcriptSaved && conversationHistory.length > 0) {
+      transcriptSaved = true;
+      const durationSeconds = Math.round((Date.now() - callStartTime) / 1000);
+      generateCallSummary(conversationHistory, patient)
+        .then(summary => {
+          const spokenLang = (languageState === 'en' || languageState === 'pt') ? languageState : summary.language;
+          if (patient?.patientId) {
+            updateAfterCall(patient.patientId, {
+              patientName: patient.patientName, summary: summary.summary, intent: summary.intent,
+              language: spokenLang, explicitDoctorPreference: summary.explicitDoctorPreference,
+              explicitTimePreference: summary.explicitTimePreference,
+            });
+          }
+          logCallOutcome({
+            patientId: patient?.patientId || null, patientName: patient?.patientName || 'Unknown',
+            callerNumber, outcome: summary.outcome, intent: summary.intent,
+            transferredToHuman: currentAgent === 'human', unclearTurns, durationSeconds,
+            summary: summary.summary, flags: summary.flags || [],
+          });
+          logCallTranscript({
+            patientId: patient?.patientId || null, patientName: patient?.patientName || 'Unknown',
+            callerNumber, outcome: summary.outcome, intent: summary.intent,
+            transferredToHuman: currentAgent === 'human', actionFired: lastActionFired,
+            durationSeconds, unclearTurns, language: spokenLang, summary: summary.summary,
+            flags: summary.flags || [], transcript: conversationHistory, telnyxCallSid: callSid,
+          }).then(rowId => notifyCallSummary(rowId, summary, durationSeconds));
+        })
+        .catch(e => console.error('[Memory] close-save error:', e.message));
+    }
   });
 
   ws.on('error', (err) => console.error('[WS] Error:', err.message));

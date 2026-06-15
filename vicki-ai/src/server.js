@@ -123,6 +123,15 @@ const HALF_RING_WAV = buildHalfRingWav();
 // TELNYX WEBHOOK — Called when a call comes in
 // ─────────────────────────────────────────────
 app.post('/telnyx/inbound', (req, res) => {
+  // Telnyx delivers Call Control events (incl. call.recording.saved from
+  // record_start) to the connection's webhook URL — which is THIS endpoint for
+  // a TeXML app. Detect a recording event here and route it to the recording
+  // handler instead of returning call TeXML to it.
+  const ev = req.body?.data?.event_type || req.body?.event_type;
+  if (ev && /recording\.saved/i.test(ev)) {
+    return handleRecordingEvent(req.body, res);
+  }
+
   const callSid = req.body.CallSid || 'unknown';
   const from    = req.body.From    || 'unknown';
   const to      = req.body.To      || 'unknown';
@@ -310,16 +319,29 @@ app.patch('/admin/memory', (req, res) => {
 //   RecordingUrl, RecordingSid, RecordingStatus, CallSid, RecordingDuration
 // We match CallSid → call_logs.telnyx_call_sid, store the URL, and send the
 // recording link to Telegram as a follow-up to the per-call summary message.
-app.post('/telnyx/recording', async (req, res) => {
-  res.sendStatus(200); // ack immediately — never make Telnyx wait or retry
+// Shared handler — parses BOTH the TeXML recordingStatusCallback shape
+// (RecordingUrl/CallSid, Twilio-compatible) AND the Call Control event shape
+// (data.payload.recording_urls + call_control_id), since record_start delivers
+// the latter to the connection webhook.
+async function handleRecordingEvent(body, res) {
+  if (res && !res.headersSent) res.sendStatus(200); // ack immediately
   try {
-    const b = req.body || {};
-    const callSid      = b.CallSid || b.call_control_id || b.call_sid || null;
-    const recordingUrl = b.RecordingUrl || b.recording_url ||
-                         (b.public_recording_urls && (b.public_recording_urls.mp3 || b.public_recording_urls.wav)) || null;
-    const status       = b.RecordingStatus || b.status || 'completed';
-    console.log(`[Telnyx] Recording webhook | CallSid: ${callSid} | status: ${status} | url: ${recordingUrl ? 'yes' : 'no'}`);
-    if (!callSid || !recordingUrl) return;
+    const b = body || {};
+    const payload = b?.data?.payload || {};
+    const callSid =
+      b.CallSid || b.call_control_id || b.call_sid ||
+      payload.call_control_id || payload.call_session_id || null;
+    const recordingUrl =
+      b.RecordingUrl || b.recording_url ||
+      (b.public_recording_urls && (b.public_recording_urls.mp3 || b.public_recording_urls.wav)) ||
+      (payload.recording_urls && (payload.recording_urls.mp3 || payload.recording_urls.wav)) ||
+      (payload.public_recording_urls && (payload.public_recording_urls.mp3 || payload.public_recording_urls.wav)) ||
+      null;
+    console.log(`[Telnyx] Recording event | CallSid: ${callSid} | url: ${recordingUrl ? 'yes' : 'no'}`);
+    if (!callSid || !recordingUrl) {
+      console.warn('[Telnyx] Recording event missing callSid or url — raw:', JSON.stringify(b).slice(0, 400));
+      return;
+    }
 
     const { attachRecordingUrl } = require('./patientMemory');
     const row = await attachRecordingUrl(callSid, recordingUrl);
@@ -337,9 +359,11 @@ app.post('/telnyx/recording', async (req, res) => {
     ].filter(Boolean).join('\n');
     telegram.notify(msg, { disable_web_page_preview: true }).catch(() => {});
   } catch (e) {
-    console.error('[Telnyx] Recording webhook error:', e.message);
+    console.error('[Telnyx] Recording event error:', e.message);
   }
-});
+}
+
+app.post('/telnyx/recording', (req, res) => handleRecordingEvent(req.body, res));
 
 // ─────────────────────────────────────────────
 // CALL TRANSCRIPT VIEW — GET /calls/:id?key=ADMIN_KEY
