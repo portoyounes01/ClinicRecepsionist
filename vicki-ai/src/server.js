@@ -312,6 +312,44 @@ app.patch('/admin/memory', (req, res) => {
   res.json({ updated: id, record: mem[id] });
 });
 
+// GET /admin/patient?key=ADMIN_KEY&q=NAME — look up a patient across call_logs
+// (call history + transcripts) and the lifecycle tables (patients, tracked
+// appointments). Read-only, key-gated. Useful for "what's happening with X".
+app.get('/admin/patient', async (req, res) => {
+  if (req.query.key !== (process.env.ADMIN_KEY || 'vicki2025')) return res.status(403).json({ error: 'Forbidden' });
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.status(400).json({ error: 'Provide ?q=NAME or phone' });
+  const db = require('./db');
+  if (!db.isEnabled()) return res.status(503).json({ error: 'DB disabled' });
+  const like = `%${q}%`;
+  try {
+    const calls = await db.many(
+      `SELECT id, patient_name, caller_number, outcome, intent, action_fired,
+              duration_seconds, recording_url IS NOT NULL AS has_recording, summary, created_at
+         FROM call_logs
+        WHERE patient_name ILIKE $1 OR caller_number ILIKE $1
+        ORDER BY created_at DESC LIMIT 25`, [like]);
+    let patients = [], appts = [];
+    try {
+      patients = await db.many(
+        `SELECT id, newsoft_patient_id, name, phone_e164, language, last_visit,
+                recare_due_date, opt_out_whatsapp, opt_out_sms
+           FROM patients WHERE name ILIKE $1 OR phone_e164 ILIKE $1 LIMIT 25`, [like]);
+      if (patients.length) {
+        const ids = patients.map(p => p.id);
+        appts = await db.many(
+          `SELECT id, patient_id, newsoft_appointment_id, appointment_at,
+                  confirm_status, confirm_channel, reminder_sent_at, source
+             FROM appointments_tracked WHERE patient_id = ANY($1::bigint[])
+            ORDER BY appointment_at DESC LIMIT 50`, [ids]);
+      }
+    } catch (e) { /* lifecycle tables optional */ }
+    res.json({ query: q, calls, patients, appointments: appts });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─────────────────────────────────────────────
 // CALL RECORDING WEBHOOK — Telnyx posts here when a recording is ready
 // ─────────────────────────────────────────────
