@@ -1871,6 +1871,20 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
     };
   }
 
+  // RESCHEDULE / CANCEL existing — "remarcar", "desmarcar", "cancelar", "mudar a
+  // consulta", reschedule/move/change. Route to appointments AND auto-run it so it
+  // immediately loads the appointment (get_appointments) instead of stalling on a
+  // bridge like "já verifico isso" and then going silent (which killed MARIA's call).
+  const manageExisting = /\b(remarcar|reagendar|desmarcar|cancelar|mudar a (minha )?consulta|mudar de (dia|hora)|trocar a consulta|alterar a (minha )?consulta|reschedule|re-?schedule|move (my )?appointment|change (my )?appointment|cancel (my )?appointment)\b/.test(text);
+  if (manageExisting && currentAgent !== 'appointments' && currentAgent !== 'emergency') {
+    return {
+      speak: '',
+      action: 'transfer_to_appointments',
+      currentAgent: 'appointments',
+      autoSpeak: true, // immediately run the appointments agent → loads the appointment, never stalls
+    };
+  }
+
   // FAMILY BOOKING — caller wants to book for a family member, not themselves.
   // Route to the dedicated family agent so we book on the FAMILY MEMBER's chart
   // (creating their file if needed), never the caller's. Needs a known caller.
@@ -2657,9 +2671,12 @@ async function processTurn({
   if (
     currentAgent === 'appointments' &&
     action === 'none' &&
-    !isSyntheticTurn &&
     pendingAppts?.length === 0
   ) {
+    // NOTE: this now fires on synthetic ([continua]) turns too — so a reschedule/
+    // cancel auto-run after transfer loads the appointment instead of stalling on
+    // a bridge then going silent (which ended MARIA's reschedule call). The
+    // apptFetched check below still prevents any redundant re-fetch.
     // Check if get_appointments has already been called in this session (look in history)
     const apptFetched = history.some(m => {
       // The preserved "Consultas do paciente:" system message survives history
