@@ -967,6 +967,26 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         action: 'none',
       };
 
+    case 'confirm_appointment': {
+      if (!actionResult.confirmed) {
+        // Don't claim a confirmation the system didn't accept — hand off cleanly.
+        return {
+          speak: en
+            ? `I'm sorry, I couldn't confirm it in our system right now. One moment — I'll connect you with someone from our team.`
+            : `Peço desculpa, não consegui confirmar no nosso sistema neste momento. Aguarde um momento — vou passar a chamada a alguém da nossa equipa.`,
+          action: 'transfer_to_human',
+        };
+      }
+      const appt = actionResult.confirmedAppointment;
+      const detail = appt?.display ? (en ? ` for ${appt.display}` : `, ${appt.display},`) : '';
+      return {
+        speak: en
+          ? `Perfect — your appointment${detail} is confirmed. We'll see you there! Is there anything else I can help with?`
+          : `Perfeito — a sua consulta${detail} está confirmada. Esperamos por si! Posso ajudar em mais alguma coisa?`,
+        action: 'none',
+      };
+    }
+
     default:
       return null;
   }
@@ -1605,6 +1625,30 @@ async function executeAction(action, params, patient, callerNumber, history = []
         .filter(a => String(a.appointmentId) !== String(resolvedId));
 
       return { cancelled: true, cancelledAppointment: cancelledAppt, remainingAppointments };
+    }
+
+    case 'confirm_appointment': {
+      // Resolve the real appointmentId server-side from pendingAppts — never trust
+      // an AI-provided ID (same rule as cancel). Marks the Newsoft status as
+      // "Confirmada" (code C) via PUT /appointment/status-code.
+      let resolvedId = params.appointmentId;
+      let confirmedAppt = null;
+      if (params._pendingAppts && params._pendingAppts.length > 0) {
+        const match = params._pendingAppts.find(a => String(a.appointmentId) === String(params.appointmentId))
+          || params._pendingAppts[0]; // default to the only/first appointment
+        if (match) {
+          resolvedId = match.appointmentId;
+          confirmedAppt = match;
+        }
+      }
+      if (!resolvedId) return { confirmed: false, error: 'no appointment id to confirm' };
+      try {
+        await newsoft.confirmAppointment({ appointmentId: resolvedId, channel: 'call' });
+        return { confirmed: true, confirmedAppointment: confirmedAppt };
+      } catch (e) {
+        console.error('[confirm_appointment] Newsoft error:', e.message);
+        return { confirmed: false, error: e.message };
+      }
     }
 
     default:
@@ -2829,7 +2873,7 @@ async function processTurn({
             ? { ...sGuarded.params, _lastOfferedDate: lastOfferedDate, _slotSearchDirection: 'later', _datePref: resolveDatePreference(userText, new Date().toISOString().split('T')[0]), _bookingReasonText: sUpdatedReason, _pendingSlots: pendingSlots }
             : sGuarded.action === 'book_appointment'
               ? { ...sGuarded.params, _pendingSlots: pendingSlots, _bookingReasonText: sUpdatedReason }
-              : sGuarded.action === 'cancel_appointment'
+              : (sGuarded.action === 'cancel_appointment' || sGuarded.action === 'confirm_appointment')
                 ? { ...sGuarded.params, _pendingAppts: pendingAppts }
                 : sGuarded.params;
           const sActionResult = await executeAction(sGuarded.action, enrichedSParams, patient, callerNumber, history, nextLanguageState);
@@ -2975,7 +3019,7 @@ async function processTurn({
         : {};
       const enrichedParams = action === 'book_appointment'
         ? { ...params, ...familyBookParams, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText }
-        : action === 'cancel_appointment'
+        : (action === 'cancel_appointment' || action === 'confirm_appointment')
           ? { ...params, _pendingAppts: pendingAppts }
           : action === 'check_slots'
             ? {
