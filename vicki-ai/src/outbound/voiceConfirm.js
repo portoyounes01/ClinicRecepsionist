@@ -69,6 +69,11 @@ async function placeConfirmCall(clinic, tracked) {
 
 /** SMS fallback when we can't place a voice call. */
 async function smsConfirmFallback(clinic, tracked) {
+  // MASTER KILL-SWITCH: LIFECYCLE_SEND=off stops automated lifecycle confirmations.
+  if (String(process.env.LIFECYCLE_SEND || '').toLowerCase() === 'off') {
+    console.log(`[ConfirmCall] LIFECYCLE_SEND=off — blocked SMS confirm for appt ${tracked?.newsoft_appointment_id}`);
+    return;
+  }
   try {
     const sms = require('../smsService');
     const lang = require('../lang').pickLang(tracked.language, tracked.phone_e164);
@@ -91,6 +96,11 @@ async function smsConfirmFallback(clinic, tracked) {
 
 // ─── Job handler ───────────────────────────────────────────────────────────────
 async function handleConfirmCallJob(payload) {
+  // MASTER KILL-SWITCH: stop the whole confirm job (voice call + SMS fallback).
+  if (String(process.env.LIFECYCLE_SEND || '').toLowerCase() === 'off') {
+    console.log('[ConfirmCall] LIFECYCLE_SEND=off — confirm job skipped');
+    return;
+  }
   const tracked = await db.one(
     `SELECT a.*, p.phone_e164, p.language, p.opt_out_sms
        FROM appointments_tracked a JOIN patients p ON p.id = a.patient_id

@@ -78,7 +78,21 @@ function backoffMs(attempts) {
   return Math.min(60 * 60 * 1000, Math.pow(2, attempts) * 60 * 1000); // 2^n min, cap 1h
 }
 
+// Job types that SEND an outbound message to a patient. The master kill-switch
+// (LIFECYCLE_SEND=off) skips these so NO reminder/recare/reactivation/confirm/
+// review goes out. Inbound reply-handling jobs are not in this list.
+const OUTBOUND_SEND_JOBS = new Set([
+  'reminder_whatsapp', 'confirm_call', 'review_request', 'review_nudge', 'recare', 'reactivation',
+]);
+
 async function runJob(job) {
+  // MASTER KILL-SWITCH: stop all automated outbound lifecycle sends at the single
+  // dispatch chokepoint. Marks the job done (not failed) so it won't pile up retries.
+  if (String(process.env.LIFECYCLE_SEND || '').toLowerCase() === 'off' && OUTBOUND_SEND_JOBS.has(job.type)) {
+    console.log(`[Scheduler] LIFECYCLE_SEND=off — skipping outbound job ${job.id} (${job.type})`);
+    await db.query(`UPDATE jobs SET status='done', last_error='skipped: LIFECYCLE_SEND=off', updated_at=now() WHERE id=$1`, [job.id]);
+    return;
+  }
   const handler = _handlers.get(job.type);
   if (!handler) {
     console.error(`[Scheduler] No handler for job type "${job.type}" (job ${job.id})`);

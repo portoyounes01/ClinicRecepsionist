@@ -48,6 +48,14 @@ function toWaNumber(phone) {
  * @returns {Promise<{messageId:string}|null>}
  */
 async function sendTemplate(clinic, to, templateName, opts = {}) {
+  // MASTER KILL-SWITCH: LIFECYCLE_SEND=off stops ALL automated lifecycle sends
+  // (reminders, recare, reactivation, reviews, confirmations). Does NOT affect the
+  // inbound booking-confirmation SMS, which is sent from the live voice flow.
+  if (String(process.env.LIFECYCLE_SEND || '').toLowerCase() === 'off') {
+    console.log(`[WA] LIFECYCLE_SEND=off — blocked template "${templateName}"`);
+    return null;
+  }
+
   const wa = clinic?.whatsapp || {};
   const lang       = opts.lang || (clinic?.locale === 'en' ? 'en' : 'pt_PT');
   const bodyParams = opts.bodyParams || [];
