@@ -917,15 +917,17 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         const t  = (bs && bs.date && bs.time) ? humanSlot(bs.date + 'T' + bs.time, lang) : null;
         const smsLineEn = actionResult.smsSent ? ` I've just sent you a confirmation by text.` : '';
         const smsLinePt = actionResult.smsSent ? ` Acabei de lhe enviar a confirmação por mensagem.` : '';
+        // VOICE NOTE: level tone, no exclamation marks (they make ElevenLabs sound
+        // over-excited). Calm and warm is the receptionist register we want.
         let confirmSpeak;
         if (en) {
           confirmSpeak = (bs && t)
-            ? `Perfect — you're all booked at Instituto Vilas Boas in Loulé! We'll see you ${t.dayName} at ${t.timeStr} with ${bs.medicName}.${smsLineEn} Is there anything else I can help with?`
-            : `Perfect — you're all booked at Instituto Vilas Boas in Loulé!${smsLineEn} Is there anything else I can help with?`;
+            ? `Done. You're all booked at Instituto Vilas Boas in Loulé. We'll see you ${t.dayName} at ${t.timeStr} with ${bs.medicName}.${smsLineEn} Is there anything else I can help with?`
+            : `Done. You're all booked at Instituto Vilas Boas in Loulé.${smsLineEn} Is there anything else I can help with?`;
         } else {
           confirmSpeak = (bs && t)
-            ? `Perfeito — a sua marcação foi registada no Instituto Vilas Boas em Loulé! Esperamos por si no dia ${t.dayName} às ${t.timeStr} com ${bs.medicName}.${smsLinePt} Posso ajudar em mais alguma coisa?`
-            : `Perfeito — a sua marcação foi registada no Instituto Vilas Boas em Loulé!${smsLinePt} Posso ajudar em mais alguma coisa?`;
+            ? `Pronto. A sua marcação foi registada no Instituto Vilas Boas em Loulé. Esperamos por si no dia ${t.dayName} às ${t.timeStr} com ${bs.medicName}.${smsLinePt} Posso ajudar em mais alguma coisa?`
+            : `Pronto. A sua marcação foi registada no Instituto Vilas Boas em Loulé.${smsLinePt} Posso ajudar em mais alguma coisa?`;
         }
         return { speak: confirmSpeak, action: 'none' };
       }
@@ -979,10 +981,13 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
       }
       const appt = actionResult.confirmedAppointment;
       const detail = appt?.display ? (en ? ` for ${appt.display}` : `, ${appt.display},`) : '';
+      // VOICE NOTE: keep this calm and level — exclamation marks make ElevenLabs
+      // read the line with an over-excited intonation, which sounds wrong for a
+      // receptionist confirming an appointment. Plain periods only.
       return {
         speak: en
-          ? `Perfect — your appointment${detail} is confirmed. We'll see you there! Is there anything else I can help with?`
-          : `Perfeito — a sua consulta${detail} está confirmada. Esperamos por si! Posso ajudar em mais alguma coisa?`,
+          ? `Got it. Your appointment${detail} is confirmed. Is there anything else I can help with?`
+          : `Pronto. A sua consulta${detail} está confirmada. Posso ajudar em mais alguma coisa?`,
         action: 'none',
       };
     }
