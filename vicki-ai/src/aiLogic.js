@@ -1643,7 +1643,24 @@ async function executeAction(action, params, patient, callerNumber, history = []
       }
       if (!resolvedId) return { confirmed: false, error: 'no appointment id to confirm' };
       try {
-        await newsoft.confirmAppointment({ appointmentId: resolvedId, channel: 'call' });
+        // axios throws on non-2xx, so a thrown error = failure. But a 200 with a
+        // negative body must ALSO count as failure — never tell the patient
+        // "confirmada" unless Newsoft really accepted it. We don't have a
+        // documented success field for PUT /appointment/status-code, so we treat
+        // it as confirmed unless the body explicitly signals an error/false.
+        // TODO: tighten once we see a real success payload (logged below).
+        const resp = await newsoft.confirmAppointment({ appointmentId: resolvedId, channel: 'call' });
+        console.log('[confirm_appointment] Newsoft response:', JSON.stringify(resp));
+        const explicitFailure = resp && (
+          resp.success === false ||
+          resp.error || resp.errorMessage || resp.Error ||
+          resp.appointmentConfirmed === false ||
+          (typeof resp.statusCode === 'number' && resp.statusCode >= 400)
+        );
+        if (explicitFailure) {
+          console.warn('[confirm_appointment] Newsoft returned a negative body — treating as NOT confirmed:', JSON.stringify(resp));
+          return { confirmed: false, error: 'newsoft negative response' };
+        }
         return { confirmed: true, confirmedAppointment: confirmedAppt };
       } catch (e) {
         console.error('[confirm_appointment] Newsoft error:', e.message);
