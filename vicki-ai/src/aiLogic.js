@@ -2138,7 +2138,37 @@ async function processTurn({
   }
 
   const nextLanguageState = detectCallerLanguage(userText, languageState);
-  const finalize = (result) => ({ ...result, languageState: nextLanguageState });
+
+  // ── SAFETY NET: never promise-and-stall ──────────────────────────────────
+  // If the model says it's going to check/verify/confirm something ("já verifico",
+  // "deixe-me ver", "um momento", "let me check"…) but returns action:"none", the
+  // turn ends with a filler and the caller hears silence (the Maria #9 / Vânia #11
+  // failure). The prompt now forbids this, but we enforce it server-side too:
+  // coerce the filler to the matching tool so the turn always advances.
+  const FILLER_PROMISE = /\b(j[áa] verifico|vou verificar|vou ver|deixe?-?me ver|um momento|s[óo] um momento|j[áa] confirmo|vou confirmar|let me check|one moment|i'?ll check|let me (?:see|look)|checking that)\b/i;
+  const finalize = (result) => {
+    try {
+      const out = result || {};
+      const noTool = !out.action || out.action === 'none';
+      const promisesCheck = typeof out.speak === 'string' && FILLER_PROMISE.test(out.speak);
+      // Only coerce on agents where a lookup is meaningful and not already chaining.
+      const coerceableAgent = ['appointments', 'router', 'booking'].includes(out.currentAgent);
+      if (noTool && promisesCheck && coerceableAgent && !out.actionFired && !out.autoSpeak && !isSyntheticTurn) {
+        // Re-run the agent on a synthetic [continua] turn. callHandler fires it
+        // immediately (autoSpeak) and, for the appointments agent, processTurn
+        // injects the "Chama IMEDIATAMENTE get_appointments" instruction — the
+        // same proven path the reschedule/confirm fixes use. Blank the filler so
+        // the caller doesn't hear "let me check" followed by dead air.
+        console.warn(`[SafetyNet] Filler+none → autoSpeak re-run (agent=${out.currentAgent}, speak="${out.speak?.slice(0, 50)}")`);
+        out.speak = '';
+        out.action = 'none';
+        out.autoSpeak = true;
+      }
+      return { ...out, languageState: nextLanguageState };
+    } catch (_) {
+      return { ...result, languageState: nextLanguageState };
+    }
+  };
 
   // GLOBAL goodbye — runs for every agent so "Adeus" after a booking/cancel ends
   // the call with a farewell instead of looping the "não percebi" reprompt.
