@@ -1327,20 +1327,30 @@ async function executeAction(action, params, patient, callerNumber, history = []
       const raw = await newsoft.getPatientAppointments(patient.patientId);
       if (!raw.length) return { appointments: [] };
       const appointments = raw.map(a => {
-        const iso = a.appointmentDateBegin || (a.appointmentDate + 'T' + (a.appointmentTime || '00:00'));
+        // Detect whether the source actually carries a time. If not, NEVER invent
+        // midnight ("às zero horas da manhã" — a real bug on MÓNICA's call). We
+        // announce the day only and let the team confirm the exact time.
+        const rawTimePart = (a.appointmentDateBegin?.split('T')[1] || a.appointmentTime || '').slice(0, 5);
+        const hasRealTime = !!rawTimePart && rawTimePart !== '00:00';
+        const iso = a.appointmentDateBegin || (a.appointmentDate + 'T' + (hasRealTime ? rawTimePart : '00:00'));
         const t   = humanSlot(iso, lang);
         const doctorName = spokenDoctorName(a.medicName || a.medicShortName);
+        const display = hasRealTime
+          ? (lang === 'en'
+              ? `${t.dayName} at ${t.timeStr} with ${doctorName}`
+              : `${t.dayName} às ${t.timeStr} da ${t.period} com ${doctorName}`)
+          : (lang === 'en'
+              ? `${t.dayName} with ${doctorName}`
+              : `${t.dayName} com ${doctorName}`);
         return {
           appointmentId: a.appointmentId,
-          display: lang === 'en'
-            ? `${t.dayName} at ${t.timeStr} with ${doctorName}`
-            : `${t.dayName} às ${t.timeStr} da ${t.period} com ${doctorName}`,
+          display,
           doctor:      doctorName,
           medicName:   doctorName,
           date:        iso?.split('T')[0],
-          time:        iso?.split('T')[1]?.slice(0, 5),
+          time:        hasRealTime ? rawTimePart : null,
           displayDate: t.dayName,
-          displayTime: t.timeStr,
+          displayTime: hasRealTime ? t.timeStr : null,
         };
       });
       for (const appt of appointments) {
@@ -1871,11 +1881,11 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
     };
   }
 
-  // RESCHEDULE / CANCEL existing — "remarcar", "desmarcar", "cancelar", "mudar a
-  // consulta", reschedule/move/change. Route to appointments AND auto-run it so it
-  // immediately loads the appointment (get_appointments) instead of stalling on a
-  // bridge like "já verifico isso" and then going silent (which killed MARIA's call).
-  const manageExisting = /\b(remarcar|reagendar|desmarcar|cancelar|mudar a (minha )?consulta|mudar de (dia|hora)|trocar a consulta|alterar a (minha )?consulta|reschedule|re-?schedule|move (my )?appointment|change (my )?appointment|cancel (my )?appointment)\b/.test(text);
+  // MANAGE existing — reschedule / cancel / CONFIRM / check. Route to appointments
+  // AND auto-run it so it immediately loads the appointment (get_appointments)
+  // instead of stalling on a bridge like "já verifico isso" and going silent —
+  // the exact failure that ended MARIA's reschedule (#9) and Vania's confirm (#11).
+  const manageExisting = /\b(remarcar|reagendar|desmarcar|cancelar|confirmar (a|a minha|minha)? ?(marcacao|consulta)|confirmar a marcacao|confirmar a consulta|quero confirmar|queria confirmar|mudar a (minha )?consulta|mudar de (dia|hora)|trocar a consulta|alterar a (minha )?consulta|reschedule|re-?schedule|move (my )?appointment|change (my )?appointment|cancel (my )?appointment|confirm (my )?appointment)\b/.test(text);
   if (manageExisting && currentAgent !== 'appointments' && currentAgent !== 'emergency') {
     return {
       speak: '',
