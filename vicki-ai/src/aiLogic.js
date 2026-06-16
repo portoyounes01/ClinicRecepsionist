@@ -1915,6 +1915,13 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}, pendingSlots
   return null;
 }
 
+// Caller is booking/asking for a FAMILY MEMBER (not themselves). Covers singular
+// AND plural ("a minha filha", "os meus filhos", "as minhas crianças"), spouses,
+// parents, and the English equivalents. normalizeForIntent strips accents, so
+// "criança" arrives as "crianca". Shared by the router override and the inline
+// router so both stay in sync.
+const FAMILY_MEMBER_RE = /\b(para (o|a|os|as) (meu|minha|meus|minhas)|(do|da|dos|das) (meu|minha|meus|minhas)|(o|os) meu(s)? filho(s)?|(a|as) minha(s)? filha(s)?|meu(s)? filho(s)?|minha(s)? filha(s)?|crianca(s)?|filho(s)?|filha(s)?|minha esposa|meu marido|meu esposo|minha mulher|for my (son|daughter|kid|kids|child|children|wife|husband|partner|mother|father|mom|dad)|my (son|daughter|kid|kids|child|children))\b/;
+
 function deterministicTransferOverride(currentAgent, userText, languageState, patient) {
   if (!userText || userText === '[continua]') return null;
   const text = normalizeForIntent(userText);
@@ -1964,7 +1971,7 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
   // FAMILY BOOKING — caller wants to book for a family member, not themselves.
   // Route to the dedicated family agent so we book on the FAMILY MEMBER's chart
   // (creating their file if needed), never the caller's. Needs a known caller.
-  const familyMember = /\b(para (o|a) meu|para (o|a) minha|do meu|da minha|para (o|a) filh|meu filho|minha filha|minha esposa|meu marido|meu esposo|minha mulher|for my (son|daughter|kid|child|wife|husband|partner|mother|father|mom|dad)|my (son|daughter|kid|child)\b)/.test(text);
+  const familyMember = FAMILY_MEMBER_RE.test(text);
   const wantsToBook = /\b(marcar|agendar|consulta|book|schedule|appointment)\b/.test(text);
   if (familyMember && wantsToBook && currentAgent !== 'family' && currentAgent !== 'emergency') {
     return {
@@ -2048,7 +2055,7 @@ function deterministicRouterDecision(userText, languageState) {
   }
   // Family booking BEFORE generic booking — "marcar para a minha filha" must go
   // to the family agent (books on the family member's chart), not normal booking.
-  const familyBooking = /\b(para (o|a) meu|para (o|a) minha|do meu|da minha|para (o|a) filh|meu filho|minha filha|minha esposa|meu marido|meu esposo|minha mulher|for my (son|daughter|kid|child|wife|husband|partner|mother|father|mom|dad)|my (son|daughter|kid|child)\b)/.test(text);
+  const familyBooking = FAMILY_MEMBER_RE.test(text);
   if (familyBooking && booking) {
     return {
       intent: 'family',
