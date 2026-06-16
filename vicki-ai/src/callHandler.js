@@ -1088,7 +1088,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // If Vicki's line says it's booked/cancelled but no real book_appointment /
       // cancel_appointment fired this turn, replace the false claim and don't hang up.
       if (result.speak) {
-        const falseBooking = claimsBookingDone(result.speak) && result.actionFired !== 'book_appointment';
+        // A "confirmada" line is legitimate after a real confirm_appointment OR a
+        // book_appointment — only suppress it when neither action actually fired.
+        const backedByRealAction = result.actionFired === 'book_appointment' || result.actionFired === 'confirm_appointment';
+        const falseBooking = claimsBookingDone(result.speak) && !backedByRealAction;
         const falseCancel  = claimsCancelDone(result.speak)  && result.actionFired !== 'cancel_appointment';
         if (falseBooking || falseCancel) {
           console.warn(`[Guard] Suppressed FALSE ${falseBooking ? 'booking' : 'cancel'} claim (actionFired=${result.actionFired}): "${result.speak}"`);
