@@ -2,6 +2,18 @@
 
 > **Purpose:** running record of what we're doing, decisions made, and findings — so any new chat or agent can read this + [ROADMAP.md](ROADMAP.md) and instantly know the current state. Newest entries at the top.
 
+## 2026-06-16 — Fix "Vicki says she'll check, then goes silent" (promise-and-stall)
+
+Audited today's 9 calls. Found the recurring "doesn't speak / stops talking" symptom = **filler-then-idle**: LLM emits a filler ("já verifico isso para si") with `action:"none"` and the turn ends with no tool call → dead air until the 90s watchdog hangs up (calls 11 Vânia confirm, earlier Maria #9 reschedule). Confirm/reschedule paths were already patched (31b8c6c / 60cd27f via deterministic `autoSpeak`), but there was **no general guardrail** — any agent could still stall.
+
+Fix (committed + pushed to main):
+- `agents/sharedPrompt.js` — global CONTRATO rule: filler that promises a check ⇒ `action` MUST be the matching tool in the same JSON, never `none`.
+- `aiLogic.js finalize()` — server-side net: on appointments/router/booking, if `action:none` + speak matches the filler-promise regex + not already chaining + not a synthetic turn → blank the filler and `autoSpeak` to re-run the agent (which injects "Chama IMEDIATAMENTE get_appointments"). Loop-guarded by `!isSyntheticTurn`.
+
+Verified earlier "state stuck after error" claim is **stale** — callHandler catch (1380–1389) already resets `processingTurn`/`isSpeaking`. "Two Vickis" is the patience filler overlapping, already mitigated by `stopFillerIfPlaying()`; not touched.
+
+**Still open / to watch:** call 17 (booking → one turn → silence) looked like caller hangup or endpointing drop, not a logic stall — left alone pending logs. Call 10 cancelled an appt with **Dr. Hugo Almeida** (medicId 25) who is supposed to be hard-excluded — verify the exclusion covers the cancel/get_appointments path.
+
 ## 📌 CURRENT STATE (snapshot)
 
 - **Active goal:** launch **Super Vicki** = the patient-lifecycle engine (EPIC 1 in [ROADMAP.md](ROADMAP.md)).
