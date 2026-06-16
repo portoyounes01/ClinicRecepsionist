@@ -946,10 +946,12 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
         };
       }
       if (actionResult.cancelled && actionResult.remainingAppointments) {
+        // VOICE NOTE: after a cancellation, immediately offer to rebook so the
+        // patient doesn't lose their place. A "yes" routes to the booking agent.
         return {
           speak: en
-            ? `Done, it's cancelled. I don't see any other appointments booked. Is there anything else I can help with?`
-            : `Pronto, está cancelado. Não tenho mais consultas marcadas. Posso ajudar em mais alguma coisa?`,
+            ? `Done, it's cancelled. Would you like me to find a new time for you so you don't lose your place?`
+            : `Pronto, está cancelado. Quer que lhe encontre uma nova data, para não perder o seu lugar?`,
           action: 'none',
           pendingAppointments: [],
         };
