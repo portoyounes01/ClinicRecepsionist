@@ -1935,7 +1935,7 @@ const FAMILY_MEMBER_RE = /\b(para (o|a|os|as) (meu|minha|meus|minhas)|(do|da|dos
 // chart. So ANY intent (book OR manage) for a friend → transfer to the team.
 const THIRD_PARTY_RE = /\b(meu amigo|minha amiga|meus amigos|minhas amigas|o amigo|a amiga|um amigo|uma amiga|colega|vizinh[oa]|conhecid[oa]|for (a|my) friend|for my colleague|my friend|a friend of mine|someone else|outra pessoa|uma pessoa)\b/;
 
-function deterministicTransferOverride(currentAgent, userText, languageState, patient) {
+function deterministicTransferOverride(currentAgent, userText, languageState, patient, history = []) {
   if (!userText || userText === '[continua]') return null;
   const text = normalizeForIntent(userText);
 
@@ -2465,7 +2465,7 @@ async function processTurn({
     }
   }
 
-  const transferOverride = deterministicTransferOverride(currentAgent, userText, nextLanguageState, patient);
+  const transferOverride = deterministicTransferOverride(currentAgent, userText, nextLanguageState, patient, history);
   if (transferOverride) {
     const parsed = { speak: transferOverride.speak, action: transferOverride.action || 'none', intent: transferOverride.currentAgent, params: {} };
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
