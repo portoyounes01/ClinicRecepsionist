@@ -1922,7 +1922,7 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}, pendingSlots
 // parents, and the English equivalents. normalizeForIntent strips accents, so
 // "criança" arrives as "crianca". Shared by the router override and the inline
 // router so both stay in sync.
-const FAMILY_MEMBER_RE = /\b(para (o|a|os|as) (meu|minha|meus|minhas)|(do|da|dos|das) (meu|minha|meus|minhas)|(o|os) meu(s)? filho(s)?|(a|as) minha(s)? filha(s)?|meu(s)? filho(s)?|minha(s)? filha(s)?|crianca(s)?|filho(s)?|filha(s)?|minha esposa|meu marido|meu esposo|minha mulher|for my (son|daughter|kid|kids|child|children|wife|husband|partner|mother|father|mom|dad)|my (son|daughter|kid|kids|child|children))\b/;
+const FAMILY_MEMBER_RE = /\b(para (o|a|os|as) (meu|minha|meus|minhas)|(do|da|dos|das) (meu|minha|meus|minhas)|(o|os) meu(s)? filho(s)?|(a|as) minha(s)? filha(s)?|meu(s)? filho(s)?|minha(s)? filha(s)?|crianca(s)?|filho(s)?|filha(s)?|meu pai|minha mae|meu irmao|minha irma|meus pais|minha esposa|meu marido|meu esposo|minha mulher|for my (son|daughter|kid|kids|child|children|wife|husband|partner|mother|father|mom|dad|brother|sister|parents)|my (son|daughter|kid|kids|child|children|father|mother|mom|dad|brother|sister))\b/;
 
 function deterministicTransferOverride(currentAgent, userText, languageState, patient) {
   if (!userText || userText === '[continua]') return null;
@@ -1944,6 +1944,22 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
       action: 'transfer_to_human',
       currentAgent: 'human',
       keepSpeak: true, // keep the empathetic pain message — don't replace with the generic transfer line
+    };
+  }
+
+  // FAMILY MEMBER's EXISTING appointment (confirm / cancel / check "my father's
+  // appointment tomorrow"). We CANNOT look this up — get_appointments only reads
+  // the CALLER's chart, so confirming/checking a relative's appointment on the
+  // caller's chart returns "no appointments" and lies to the patient (JEANINE,
+  // call #31). The only safe answer is a human. This MUST run before the
+  // existing/manage blocks below, which assume the appointment is the caller's.
+  const familyForManage = FAMILY_MEMBER_RE.test(text);
+  const managesExistingVerb = /\b(confirm|confirmar|cancel|cancelar|desmarcar|remarcar|reagendar|reschedule|change|mudar|alterar|verificar|check|tem (uma |a )?consulta|has an appointment|appointment (tomorrow|today))\b/.test(text);
+  if (familyForManage && managesExistingVerb && currentAgent !== 'emergency') {
+    return {
+      speak: '',
+      action: 'transfer_to_human',
+      currentAgent: 'human',
     };
   }
 
@@ -2204,6 +2220,12 @@ async function processTurn({
       ? `[INSTRUÇÃO INTERNA] Chama IMEDIATAMENTE get_appointments para carregar as consultas reais do paciente via API. ` +
         `Não uses dados de histórico — precisas dos appointmentIds reais para cancelar. ` +
         `Após receberes os resultados, apresenta ao paciente e pergunta o que quer fazer.`
+      : currentAgent === 'emergency'
+      // Emergency MUST lead with empathy, NOT the generic "open naturally / offer
+      // the pending slot" line (that produced JEANINE's cold handoff, call #30).
+      ? `[INSTRUÇÃO INTERNA] É uma situação de dor/urgência. Numa só fala curta: reconhece com empatia que está com dores, ` +
+        `deseja as melhoras, e diz que vais passar já a chamada a um colega que fica a ajudar — pede para ficar na linha. ` +
+        `action = "transfer_to_human". NUNCA marques, NUNCA dês conselho clínico, NUNCA uses a frase genérica de transferência.`
       : `[INSTRUÇÃO INTERNA] Acabaste de ser activado como agente ${currentAgent}. ` +
         `Abre naturalmente: apresenta a informação relevante ou, se estás no contexto de marcação, ` +
         `oferece o slot que ficou pendente. Fala como se fosse a tua primeira frase neste turno.`;
