@@ -1972,6 +1972,34 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
     };
   }
 
+  // NAMED THIRD PARTY — caller manages/books an appointment for a person they
+  // NAME, with no relationship word ("a consulta da Maria Signe Viegas",
+  // "appointment for João Silva"). get_appointments only reads the CALLER's
+  // chart, so this returns a false "no appointments" and loops (MARIA LÚCIA,
+  // call #36). If the named person is NOT the caller → transfer to the team.
+  // Runs on RAW userText (capitals preserved) so we can spot a proper name.
+  const rawText = String(userText || '');
+  const namedApptMatch = rawText.match(/\b(?:consulta|marca[çc][ãa]o|appointment)\s+(?:d[aoe]s?|para|for|of)\s+(?:a\s+|o\s+|the\s+)?((?:[A-ZÁÀÂÃÉÊÍÓÔÕÚ][\wÀ-ÿ'-]+(?:\s+|$)){2,})/);
+  if (namedApptMatch && currentAgent !== 'emergency' && currentAgent !== 'family') {
+    const namedPerson = namedApptMatch[1].trim();
+    const callerName = (patient?.patientName || '').trim();
+    // Is the named person the caller themselves? A single shared FIRST name
+    // (e.g. both "Maria") is NOT enough — "Maria Signe Viegas" ≠ "Maria Lúcia
+    // … Gomes" (call #36). Treat as the SAME person only if the surname (last
+    // token) matches OR at least 2 name tokens overlap.
+    const personTokens = normalizeForIntent(namedPerson).split(' ').filter(t => t.length > 2);
+    const callerTokens = normalizeForIntent(callerName).split(' ').filter(t => t.length > 2);
+    const overlap = personTokens.filter(p => callerTokens.includes(p));
+    const surnameMatches = personTokens.length && callerTokens.length &&
+      callerTokens.includes(personTokens[personTokens.length - 1]);
+    const sharesName = surnameMatches || overlap.length >= 2;
+    const managesOrBooks = /\b(confirm|confirmar|cancel|cancelar|desmarcar|remarcar|reagendar|reschedule|marcar|agendar|book|schedule|mudar|alterar)\b/.test(text);
+    if (!sharesName && managesOrBooks) {
+      console.log(`[Routing] Named third party "${namedPerson}" (caller="${callerName}") → transfer_to_human`);
+      return { speak: '', action: 'transfer_to_human', currentAgent: 'human' };
+    }
+  }
+
   // FAMILY MEMBER's EXISTING appointment (confirm / cancel / check "my father's
   // appointment tomorrow"). We CANNOT look this up — get_appointments only reads
   // the CALLER's chart, so confirming/checking a relative's appointment on the
