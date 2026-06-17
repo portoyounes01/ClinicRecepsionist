@@ -1924,6 +1924,12 @@ function clinicInfoAnswer(userText, languageState, clinicInfo = {}, pendingSlots
 // router so both stay in sync.
 const FAMILY_MEMBER_RE = /\b(para (o|a|os|as) (meu|minha|meus|minhas)|(do|da|dos|das) (meu|minha|meus|minhas)|(o|os) meu(s)? filho(s)?|(a|as) minha(s)? filha(s)?|meu(s)? filho(s)?|minha(s)? filha(s)?|crianca(s)?|filho(s)?|filha(s)?|meu pai|minha mae|meu irmao|minha irma|meus pais|minha esposa|meu marido|meu esposo|minha mulher|for my (son|daughter|kid|kids|child|children|wife|husband|partner|mother|father|mom|dad|brother|sister|parents)|my (son|daughter|kid|kids|child|children|father|mother|mom|dad|brother|sister))\b/;
 
+// THIRD PARTY who is NOT a family member: friend, colleague, neighbour, "someone".
+// These can't go to the family agent (it builds the name from the CALLER's
+// surname, which a friend doesn't share) and can't be looked up on the caller's
+// chart. So ANY intent (book OR manage) for a friend → transfer to the team.
+const THIRD_PARTY_RE = /\b(meu amigo|minha amiga|meus amigos|minhas amigas|o amigo|a amiga|um amigo|uma amiga|colega|vizinh[oa]|conhecid[oa]|for (a|my) friend|for my colleague|my friend|a friend of mine|someone else|outra pessoa|uma pessoa)\b/;
+
 function deterministicTransferOverride(currentAgent, userText, languageState, patient) {
   if (!userText || userText === '[continua]') return null;
   const text = normalizeForIntent(userText);
@@ -1944,6 +1950,20 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
       action: 'transfer_to_human',
       currentAgent: 'human',
       keepSpeak: true, // keep the empathetic pain message — don't replace with the generic transfer line
+    };
+  }
+
+  // THIRD PARTY (friend/colleague/someone else), ANY intent → human. Must run
+  // BEFORE the family blocks: a friend can't use the family agent (wrong
+  // surname) and can't be looked up on the caller's chart. Booking/confirming/
+  // cancelling for a friend is only safe via the team.
+  const thirdParty = THIRD_PARTY_RE.test(text);
+  const aboutAnAppointment = /\b(marcar|agendar|consulta|book|schedule|appointment|confirm|confirmar|cancel|cancelar|desmarcar|remarcar|reagendar|reschedule)\b/.test(text);
+  if (thirdParty && aboutAnAppointment && currentAgent !== 'emergency') {
+    return {
+      speak: '',
+      action: 'transfer_to_human',
+      currentAgent: 'human',
     };
   }
 
