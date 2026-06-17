@@ -2,6 +2,20 @@
 
 > **Purpose:** running record of what we're doing, decisions made, and findings — so any new chat or agent can read this + [ROADMAP.md](ROADMAP.md) and instantly know the current state. Newest entries at the top.
 
+## 2026-06-17 — Fix two prod failures from JEANINE's calls + confirm/cancel/voice polish
+
+Audited today's 5 calls (call_logs ids 27–31). Two real fuck-ups, both fixed + pushed:
+- **#31 false "no appointments":** caller asked to confirm her FATHER's appointment; get_appointments reads only the CALLER's chart → Vicki said "no appointments" (twice). Fix: deterministic intercept BEFORE manage-existing routing — family member + manage verb (confirm/cancel/reschedule/check/"tem consulta") → transfer_to_human. Also broadened FAMILY_MEMBER_RE to PT parents/siblings ("meu pai" wasn't matched — the exact miss).
+- **#30 cold emergency:** father's broken tooth handed off with the generic transfer line, no empathy. Cause: the synthetic [continua] turn injected the generic "open naturally" instruction for the emergency agent. Fix: emergency gets its own synthetic instruction (empathy + wish-well + stay on line + transfer).
+
+Also shipped this session: inbound confirm_appointment action wired to Newsoft (PUT status-code "C") with wait-for-true-then-confirm-else-transfer; calmer confirm/booking lines (dropped "!" → over-excited TTS); family-booking plural routing ("os meus filhos"); rebook offer immediately after a cancel.
+
+**Decision (user):** ship what's fixed, watch real calls — do NOT over-engineer against hypotheticals.
+**Open watch-items (verify via call_logs on real traffic, not test calls — user can't place test calls):**
+1. Family detection is regex-based — a relative NAMED without a relationship word (e.g. "the appointment for António tomorrow") has no family signal and still routes to the caller's chart. Watch for recurrences.
+2. Emergency empathy fix is CODE-verified only, not yet seen speaking on a live emergency call.
+3. `railway logs` only dumps a ~3s buffered snapshot (NOT a live stream) — inspect calls via the call_logs Postgres table (railway run --service Postgres + public proxy URL), never log-tailing.
+
 ## 2026-06-16 — Fix "Vicki says she'll check, then goes silent" (promise-and-stall)
 
 Audited today's 9 calls. Found the recurring "doesn't speak / stops talking" symptom = **filler-then-idle**: LLM emits a filler ("já verifico isso para si") with `action:"none"` and the turn ends with no tool call → dead air until the 90s watchdog hangs up (calls 11 Vânia confirm, earlier Maria #9 reschedule). Confirm/reschedule paths were already patched (31b8c6c / 60cd27f via deterministic `autoSpeak`), but there was **no general guardrail** — any agent could still stall.
