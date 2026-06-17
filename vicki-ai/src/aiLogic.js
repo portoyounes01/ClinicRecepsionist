@@ -2047,21 +2047,11 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
   // MARIA #9 / Vânia #11 failure) — but ONLY when it's clearly the caller's own.
   const manageExisting = /\b(remarcar|reagendar|desmarcar|cancelar|confirmar (a|a minha|minha)? ?(marcacao|consulta)|confirmar a marcacao|confirmar a consulta|quero confirmar|queria confirmar|mudar a (minha )?consulta|mudar de (dia|hora)|trocar a consulta|alterar a (minha )?consulta|reschedule|re-?schedule|move (my )?appointment|change (my )?appointment|cancel (my )?appointment|confirm (my )?appointment)\b/.test(text);
   if (manageExisting && currentAgent !== 'appointments' && currentAgent !== 'emergency') {
-    // Is it CLEARLY about the caller themselves? If so, proceed straight to the
-    // appointments agent. If there's NO self-signal (and we've already ruled out
-    // family/named third parties above), it's AMBIGUOUS — ask first instead of
-    // searching the caller's chart and risking a false "no appointments".
-    const selfSignal = /\b(a minha|minha (consulta|marcacao)|para mim|sou eu|comigo|my (appointment|booking)|i have an appointment|my consulta)\b/.test(text)
-      || /\bconfirmar a minha\b/.test(text);
-    if (!selfSignal) {
-      return {
-        speak: speakIn(languageState,
-          'Com certeza. Essa consulta é para si ou para outra pessoa?',
-          'Of course. Is this appointment for you or for someone else?'),
-        action: 'none',
-        currentAgent, // stay put; the deterministic handler above resolves the answer next turn
-      };
-    }
+    // Proceed straight to the appointments agent. We DEFAULT TO SELF here (the
+    // overwhelming common case) — third parties are already intercepted above by
+    // FAMILY_MEMBER_RE, THIRD_PARTY_RE and the named-person block. Do NOT ask
+    // "for you or someone else?" on every name-less request: that fired on a
+    // normal self-confirm and created a book→confirm→ask loop (gym 099_adv_loop).
     return {
       speak: '',
       action: 'transfer_to_appointments',
