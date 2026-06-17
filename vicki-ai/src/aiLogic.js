@@ -1617,7 +1617,29 @@ async function executeAction(action, params, patient, callerNumber, history = []
         appointmentId: resolvedId,
         reason: params.reason || 'Cancelada pelo paciente via Vicki AI',
       });
-      if (!result?.appointmentCanceled) {
+      console.log('[cancel_appointment] Newsoft response:', JSON.stringify(result));
+      // Robust success check across the shapes Newsoft actually returns. The
+      // confirm endpoint returns {"status":"NOK","message":"No lines have been
+      // updated."} on failure — assume cancel can too. Treat as cancelled when
+      // an explicit positive is present OR there's NO explicit negative; never
+      // tell the patient "cancelado" on a NOK (that would leave the old appt and
+      // create a double-booking on reschedule).
+      const cStatus = String(result?.status ?? '').toUpperCase();
+      const cMsg = String(result?.message ?? '').toLowerCase();
+      const explicitNeg = result && (
+        result.appointmentCanceled === false || result.success === false ||
+        result.error || result.errorMessage || result.Error ||
+        cStatus === 'NOK' || cStatus === 'ERROR' || cStatus === 'KO' ||
+        /no lines have been updated|not updated|nao atualizad|nao foi cancelad/.test(cMsg) ||
+        (typeof result?.statusCode === 'number' && result.statusCode >= 400)
+      );
+      const explicitPos = result && (
+        result.appointmentCanceled === true || result.success === true ||
+        cStatus === 'OK' || cStatus === 'SUCCESS' ||
+        /cancelad|updated|atualizad/.test(cMsg)
+      );
+      if (explicitNeg || (!explicitPos && result?.appointmentCanceled === undefined && cStatus === '' && cMsg === '')) {
+        console.warn('[cancel_appointment] NOT confirmed by Newsoft — treating as failed:', JSON.stringify(result));
         return { cancelled: false, error: 'Newsoft did not confirm cancellation' };
       }
 
@@ -2067,7 +2089,11 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
   // MANAGE existing — reschedule / cancel / CONFIRM / check. Route to appointments
   // and auto-run get_appointments (never stalls on a "já verifico" bridge — the
   // MARIA #9 / Vânia #11 failure) — but ONLY when it's clearly the caller's own.
-  const manageExisting = /\b(remarcar|reagendar|desmarcar|cancelar|confirmar (a|a minha|minha)? ?(marcacao|consulta)|confirmar a marcacao|confirmar a consulta|quero confirmar|queria confirmar|mudar a (minha )?consulta|mudar de (dia|hora)|trocar a consulta|alterar a (minha )?consulta|reschedule|re-?schedule|move (my )?appointment|change (my )?appointment|cancel (my )?appointment|confirm (my )?appointment)\b/.test(text);
+  // Reschedule/cancel/confirm phrased the many ways PT callers actually say it:
+  // remarcar, reagendar, adiar, antecipar, trocar/mudar o dia|hora|data, passar a
+  // consulta para, mudar para outro dia, desmarcar, cancelar (e marcar outra),
+  // voltar a marcar, alterar a consulta — plus the confirm variants and English.
+  const manageExisting = /\b(remarcar|reagendar|reagendamento|adiar|antecipar|desmarcar|cancelar|voltar a marcar|marcar (de )?novo|confirmar (a|a minha|minha)? ?(marcacao|consulta)|confirmar a marcacao|confirmar a consulta|quero confirmar|queria confirmar|mudar (a (minha )?consulta|de (dia|hora|data)|para (outro|outra) (dia|hora|data|semana))|trocar (a consulta|o dia|a hora|a data)|passar a consulta|alterar (a (minha )?consulta|o dia|a hora|a data)|reschedule|re-?schedule|postpone|move (my )?appointment|change (my )?appointment|cancel (my )?appointment|confirm (my )?appointment)\b/.test(text);
   if (manageExisting && currentAgent !== 'appointments' && currentAgent !== 'emergency') {
     // Proceed straight to the appointments agent. We DEFAULT TO SELF here (the
     // overwhelming common case) — third parties are already intercepted above by
