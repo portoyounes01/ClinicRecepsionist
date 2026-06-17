@@ -546,6 +546,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let lastActionFired     = null;   // last real API action this call (book/cancel) — proof for the transcript log
   let returnToAgent       = null;   // agent to resume after info/insurance detour
   let returnContext       = {};     // saved pendingSlots + bookingReason for resume
+  let rebookContext       = null;   // {medicId, medicName} from a cancel → reuse same doctor on rebook
   let languageState       = 'unknown';
 
   // ── Smart endpointing state ───────────────────────────────────────────────
@@ -1056,6 +1057,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         callerNumber,
         returnToAgent,
         returnContext,
+        rebookContext,
         languageState,
       });
       clearTimeout(patienceTimer); // cancel filler if API was fast
@@ -1067,6 +1069,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       if (result.pendingSlots   && result.pendingSlots.length)  { pendingSlots  = result.pendingSlots; offeredSlots = accumulateOffered(offeredSlots, result.pendingSlots); }
       else if (Array.isArray(result.pendingSlots) && result.pendingSlots.length === 0) { pendingSlots = []; } // explicit clear (e.g. after a successful booking)
       if (result.pendingAppts   !== undefined) pendingAppts  = result.pendingAppts;
+      if (result.rebookContext  !== undefined) rebookContext = result.rebookContext;
       if (result.lastOfferedDate !== undefined) lastOfferedDate = result.lastOfferedDate;
       if (result.bookingReasonText !== undefined) bookingReasonText = result.bookingReasonText;
       // Resume context: when returning from info/emergency back to booking, restore slots
@@ -1220,6 +1223,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
             callerNumber,
             returnToAgent,
             returnContext,
+            rebookContext,
             languageState,
           });
         } catch (autoErr) {
@@ -1233,6 +1237,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           if (autoResult.currentAgent   !== undefined) currentAgent   = autoResult.currentAgent;
           if (autoResult.pendingSlots   && autoResult.pendingSlots.length)  { pendingSlots  = autoResult.pendingSlots; offeredSlots = accumulateOffered(offeredSlots, autoResult.pendingSlots); }
           if (autoResult.pendingAppts   !== undefined) pendingAppts  = autoResult.pendingAppts;
+          if (autoResult.rebookContext  !== undefined) rebookContext = autoResult.rebookContext;
           if (autoResult.bookingReasonText !== undefined) bookingReasonText = autoResult.bookingReasonText;
           if (autoResult.lastOfferedDate !== undefined) lastOfferedDate = autoResult.lastOfferedDate;
           if (autoResult.returnToAgent) { returnToAgent = autoResult.returnToAgent; returnContext = autoResult.returnContext || {}; }

@@ -948,12 +948,16 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
       if (actionResult.cancelled && actionResult.remainingAppointments) {
         // VOICE NOTE: after a cancellation, immediately offer to rebook so the
         // patient doesn't lose their place. A "yes" routes to the booking agent.
+        // Carry the cancelled app't's DOCTOR forward so the rebook reuses the
+        // same doctor instead of starting from scratch.
+        const ca = actionResult.cancelledAppointment;
         return {
           speak: en
             ? `Done, it's cancelled. Would you like me to find a new time for you so you don't lose your place?`
             : `Pronto, está cancelado. Quer que lhe encontre uma nova data, para não perder o seu lugar?`,
           action: 'none',
           pendingAppointments: [],
+          rebookContext: ca ? { medicId: ca.medicId || null, medicName: ca.medicName || ca.doctor || null } : null,
         };
       }
       if (!actionResult.cancelled) {
@@ -1374,6 +1378,7 @@ async function executeAction(action, params, patient, callerNumber, history = []
           display,
           doctor:      doctorName,
           medicName:   doctorName,
+          medicId:     a.medicId ?? a.MedicId ?? null,  // for same-doctor rebook after cancel
           date:        iso?.split('T')[0],
           time:        hasRealTime ? rawTimePart : null,
           displayDate: t.dayName,
@@ -2227,6 +2232,7 @@ async function processTurn({
   callerNumber = null,
   returnToAgent = null,   // agent to return to after a detour (e.g. info → booking)
   returnContext = {},     // saved state: { pendingSlots, bookingReasonText, lastOfferedDate }
+  rebookContext = null,   // {medicId, medicName} from a cancel → reuse same doctor on rebook
   languageState = 'unknown',
 }) {
   // ── Synthetic auto-speak trigger ─────────────────────────────────────────────
@@ -2327,6 +2333,42 @@ async function processTurn({
       unclearTurns: 0,
       bookingReasonText,
     });
+  }
+
+  // ── REBOOK-AFTER-CANCEL guard ──────────────────────────────────────────────
+  // After a cancellation Vicki offers a new date ("Quer que lhe encontre uma
+  // nova data?"). If the patient affirms — including "certo"/"claro"/"ok", which
+  // the LLM misread as mere acknowledgement and dropped (LUÍS, call #35) — force
+  // the handoff to booking instead of trusting the model.
+  if (currentAgent === 'appointments' && isAffirmationOnly(userText)) {
+    const prev = (lastAssistantSpeak(history) || '').toLowerCase();
+    const offeredRebook = /\b(nova data|nova vaga|outra vaga|encontre uma|find (a )?(new|another)|new time|new date)\b/.test(prev);
+    if (offeredRebook) {
+      const parsed = { speak: '', action: 'transfer_to_booking', intent: 'booking', params: {} };
+      history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+      // Tell the booking agent to reuse the SAME doctor the patient just
+      // cancelled with, and to re-ask the motivo before checking slots.
+      const sameDoctor = rebookContext?.medicName;
+      const medicIdLine = rebookContext?.medicId ? ` (medicId ${rebookContext.medicId})` : '';
+      const rebookInstruction = sameDoctor
+        ? `[INSTRUÇÃO INTERNA] O paciente acabou de CANCELAR uma consulta e quer remarcar. ` +
+          `Mantém o MESMO médico: ${sameDoctor}${medicIdLine}. ` +
+          `Pergunta primeiro o motivo da nova consulta; depois chama check_slots com esse médico. Abre naturalmente, uma pergunta por turno.`
+        : `[INSTRUÇÃO INTERNA] O paciente acabou de CANCELAR e quer remarcar. ` +
+          `Pergunta o motivo da nova consulta e segue o fluxo normal de marcação. Abre naturalmente.`;
+      history.push({ role: 'system', content: rebookInstruction });
+      console.log(`[Guard] Rebook accepted after cancel → transfer_to_booking (sameDoctor=${sameDoctor || 'none'})`);
+      return finalize({
+        speak: '',
+        action: 'transfer_to_booking',
+        history,
+        currentAgent: 'booking',
+        unclearTurns: 0,
+        bookingReasonText,
+        rebookContext: null, // consumed
+        autoSpeak: true, // fire the booking agent immediately, don't wait for the patient
+      });
+    }
   }
 
   const transferOverride = deterministicTransferOverride(currentAgent, userText, nextLanguageState, patient);
@@ -3137,6 +3179,7 @@ async function processTurn({
             lastOfferedDate: actionResult.lastOfferedDate ?? lastOfferedDate,
             bookingReasonText: updatedBookingReasonText,
             patient:         actionResult.patient,
+            rebookContext:   formatted.rebookContext,  // same-doctor rebook after cancel
           });
         }
       }
