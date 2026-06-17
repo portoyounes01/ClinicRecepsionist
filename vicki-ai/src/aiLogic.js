@@ -2371,6 +2371,41 @@ async function processTurn({
     return finalize({ speak, action: 'hangup', history, currentAgent, unclearTurns: 0, bookingReasonText });
   }
 
+  // ── GLOBAL STUCK-LOOP ESCAPE (runs early, every agent, every path) ──────────
+  // If Vicki has already asked the SAME thing twice and the patient is still not
+  // getting through, OR we've accumulated 3+ unclear turns, stop looping and pass
+  // to a human. This runs BEFORE the router/specialist early-returns, which were
+  // bypassing the deeper loop guard — the cause of MARCILIANO #37 / #38 where the
+  // caller kept repeating himself and Vicki never advanced. Additive: only fires
+  // in the genuinely-stuck case; normal turns fall straight through.
+  {
+    // Count how many DISTINCT turns (separated by a user message) repeated the
+    // same opening clarification. We collapse adjacent same-turn duplicate logs
+    // (the router+handler both log a line) so a one-turn double-emit does NOT
+    // look like a loop — only genuine across-turn repetition counts.
+    const norm = m => { try { return (JSON.parse(m.content).speak || '').trim().toLowerCase().slice(0, 60); } catch (_) { return ''; } };
+    const sawUserBetween = [];
+    let lastSpeak = null, hadUser = true;
+    for (const m of (history || []).slice(-12)) {
+      if (m.role === 'user') { hadUser = true; continue; }
+      if (m.role !== 'assistant') continue;
+      const s = norm(m);
+      if (!s) continue;
+      if (hadUser || s !== lastSpeak) { sawUserBetween.push(s); lastSpeak = s; hadUser = false; }
+    }
+    const lastTwoSame = sawUserBetween.length >= 2 &&
+      sawUserBetween[sawUserBetween.length - 1] === sawUserBetween[sawUserBetween.length - 2];
+    if ((lastTwoSame || unclearTurns >= 3) && currentAgent !== 'emergency') {
+      const tSpeak = nextLanguageState === 'en'
+        ? "I'm sorry — I'm having trouble understanding over the line. One moment, I'll pass you to a colleague who can help."
+        : 'Peço desculpa — estou com dificuldade em perceber pela linha. Aguarde um momento, vou passar a um colega que poderá ajudar.';
+      const parsed = { speak: tSpeak, action: 'transfer_to_human', intent: 'human', params: {} };
+      history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+      console.log(`[Guard] STUCK LOOP (lastTwoSame=${lastTwoSame}, unclearTurns=${unclearTurns}) → transfer_to_human`);
+      return finalize({ speak: tSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0, bookingReasonText });
+    }
+  }
+
   // During an active booking, answer "a que horas? / que dia? / com que médico?"
   // deterministically from the pending slot — keep the slot so "sim" still books.
   const apptDetail = appointmentDetailAnswer(userText, pendingSlots, nextLanguageState);
