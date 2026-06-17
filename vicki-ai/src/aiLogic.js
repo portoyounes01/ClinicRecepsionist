@@ -2025,12 +2025,43 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
     };
   }
 
+  // Did the patient just answer the "for you or someone else?" question?
+  // (Vicki's previous line asked it.) Handle the answer deterministically.
+  const prevAsked = /\b(para si ou para outra pessoa|for you or (for )?someone else)\b/i.test(lastAssistantSpeak(history) || '');
+  if (prevAsked && currentAgent !== 'emergency') {
+    const saysSomeoneElse = /\b(outra pessoa|para outra|nao sou eu|nao e para mim|alguem|someone else|not (for )?me)\b/.test(text);
+    // Tight self-only tokens — must NOT match "para a minha filha/o meu pai"
+    // (those are handled by the family intercept above). So no bare "a minha".
+    const saysSelf = /\b(para mim|sou eu|e para mim|comigo|e comigo|myself|for me|it'?s for me|mine)\b/.test(text);
+    if (saysSomeoneElse && !saysSelf) {
+      return { speak: '', action: 'transfer_to_human', currentAgent: 'human' };
+    }
+    if (saysSelf) {
+      return { speak: '', action: 'transfer_to_appointments', currentAgent: 'appointments', autoSpeak: true };
+    }
+    // Unclear answer → fall through; the agent will re-ask.
+  }
+
   // MANAGE existing — reschedule / cancel / CONFIRM / check. Route to appointments
-  // AND auto-run it so it immediately loads the appointment (get_appointments)
-  // instead of stalling on a bridge like "já verifico isso" and going silent —
-  // the exact failure that ended MARIA's reschedule (#9) and Vania's confirm (#11).
+  // and auto-run get_appointments (never stalls on a "já verifico" bridge — the
+  // MARIA #9 / Vânia #11 failure) — but ONLY when it's clearly the caller's own.
   const manageExisting = /\b(remarcar|reagendar|desmarcar|cancelar|confirmar (a|a minha|minha)? ?(marcacao|consulta)|confirmar a marcacao|confirmar a consulta|quero confirmar|queria confirmar|mudar a (minha )?consulta|mudar de (dia|hora)|trocar a consulta|alterar a (minha )?consulta|reschedule|re-?schedule|move (my )?appointment|change (my )?appointment|cancel (my )?appointment|confirm (my )?appointment)\b/.test(text);
   if (manageExisting && currentAgent !== 'appointments' && currentAgent !== 'emergency') {
+    // Is it CLEARLY about the caller themselves? If so, proceed straight to the
+    // appointments agent. If there's NO self-signal (and we've already ruled out
+    // family/named third parties above), it's AMBIGUOUS — ask first instead of
+    // searching the caller's chart and risking a false "no appointments".
+    const selfSignal = /\b(a minha|minha (consulta|marcacao)|para mim|sou eu|comigo|my (appointment|booking)|i have an appointment|my consulta)\b/.test(text)
+      || /\bconfirmar a minha\b/.test(text);
+    if (!selfSignal) {
+      return {
+        speak: speakIn(languageState,
+          'Com certeza. Essa consulta é para si ou para outra pessoa?',
+          'Of course. Is this appointment for you or for someone else?'),
+        action: 'none',
+        currentAgent, // stay put; the deterministic handler above resolves the answer next turn
+      };
+    }
     return {
       speak: '',
       action: 'transfer_to_appointments',
