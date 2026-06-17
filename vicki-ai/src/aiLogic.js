@@ -870,10 +870,15 @@ function formatActionResponse(action, actionResult, lang = 'pt') {
     case 'get_appointments': {
       const appts = actionResult.appointments || [];
       if (!appts.length) {
+        // Empty lookup = nothing on the CALLER's chart. Don't dead-end with a
+        // flat "you have none" (callers confirming a real appointment hear it as
+        // a lie). Recover: it may be under another name OR for a family member —
+        // ask, so a "someone else" answer can go to the team. Fires ONLY on the
+        // empty result, so it can't loop a normal confirm.
         return {
           speak: en
-            ? "You don't have any appointments scheduled with us at the moment."
-            : "Neste momento não tem nenhuma consulta agendada connosco.",
+            ? "Hmm, I don't see an appointment under your number. Is it possibly for a family member, or booked under a different name?"
+            : "Hmm, não encontro nenhuma consulta associada ao seu número. Será que é para um familiar, ou está em nome de outra pessoa?",
           action: 'none',
         };
       }
@@ -1663,10 +1668,17 @@ async function executeAction(action, params, patient, callerNumber, history = []
         // TODO: tighten once we see a real success payload (logged below).
         const resp = await newsoft.confirmAppointment({ appointmentId: resolvedId, channel: 'call' });
         console.log('[confirm_appointment] Newsoft response:', JSON.stringify(resp));
+        // Real Newsoft shape on failure: {"status":"NOK","message":"No lines
+        // have been updated."} — status NOK or a "no lines updated" message both
+        // mean the confirm did NOT take.
+        const statusStr = String(resp?.status ?? '').toUpperCase();
+        const msgStr = String(resp?.message ?? '').toLowerCase();
         const explicitFailure = resp && (
           resp.success === false ||
           resp.error || resp.errorMessage || resp.Error ||
           resp.appointmentConfirmed === false ||
+          statusStr === 'NOK' || statusStr === 'ERROR' || statusStr === 'KO' ||
+          /no lines have been updated|not updated|nao atualizad/.test(msgStr) ||
           (typeof resp.statusCode === 'number' && resp.statusCode >= 400)
         );
         if (explicitFailure) {
@@ -2027,17 +2039,27 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
 
   // Did the patient just answer the "for you or someone else?" question?
   // (Vicki's previous line asked it.) Handle the answer deterministically.
-  const prevAsked = /\b(para si ou para outra pessoa|for you or (for )?someone else)\b/i.test(lastAssistantSpeak(history) || '');
-  if (prevAsked && currentAgent !== 'emergency') {
-    const saysSomeoneElse = /\b(outra pessoa|para outra|nao sou eu|nao e para mim|alguem|someone else|not (for )?me)\b/.test(text);
-    // Tight self-only tokens — must NOT match "para a minha filha/o meu pai"
-    // (those are handled by the family intercept above). So no bare "a minha".
-    const saysSelf = /\b(para mim|sou eu|e para mim|comigo|e comigo|myself|for me|it'?s for me|mine)\b/.test(text);
-    if (saysSomeoneElse && !saysSelf) {
+  const prevSpeakLc = (lastAssistantSpeak(history) || '').toLowerCase();
+  const prevAsked = /\b(para si ou para outra pessoa|for you or (for )?someone else)\b/i.test(prevSpeakLc);
+  // Recovery question after an EMPTY lookup: "é para um familiar / em nome de outra pessoa?"
+  const prevAskedEmptyRecovery = /(para um familiar|em nome de outra pessoa|for a family member|under a different name)/i.test(prevSpeakLc);
+  if ((prevAsked || prevAskedEmptyRecovery) && currentAgent !== 'emergency') {
+    // Any sign it's a relative / another person / a "yes" to the family question.
+    const saysSomeoneElse = /\b(outra pessoa|para outra|nao sou eu|nao e para mim|alguem|familiar|filh[oa]|esposa|marido|mae|pai|irma[oã]|family|daughter|son|wife|husband|mother|father|someone else|not (for )?me|under (a )?different|sim|yes|e isso|exato|exatamente|talvez|pode ser)\b/.test(text);
+    // Tight self-only tokens.
+    const saysSelf = /\b(para mim|sou eu|e para mim|e minha|so minha|a consulta e minha|comigo|e comigo|myself|for me|it'?s (for )?me|it'?s mine|mine|nao,? e minha)\b/.test(text);
+    if (saysSelf && prevAsked) {
+      // Disambiguation upfront, confirmed self → load their chart.
+      return { speak: '', action: 'transfer_to_appointments', currentAgent: 'appointments', autoSpeak: true };
+    }
+    if (saysSelf && prevAskedEmptyRecovery) {
+      // Insists it's theirs but the lookup was genuinely empty → team, never
+      // loop the "no appointments" line again.
       return { speak: '', action: 'transfer_to_human', currentAgent: 'human' };
     }
-    if (saysSelf) {
-      return { speak: '', action: 'transfer_to_appointments', currentAgent: 'appointments', autoSpeak: true };
+    if (saysSomeoneElse) {
+      // Family member / another name → can't look up by phone → team.
+      return { speak: '', action: 'transfer_to_human', currentAgent: 'human' };
     }
     // Unclear answer → fall through; the agent will re-ask.
   }
