@@ -590,6 +590,9 @@ server.listen(PORT, async () => {
   // Schedule nightly improvement agent (runs at 2am)
   scheduleNightly();
 
+  // Daily + monthly call-stats digest to Telegram (additive; reads call_logs).
+  try { require('./statsDigest').scheduleDigests(); } catch (e) { console.error('[Stats] scheduler init failed:', e.message); }
+
   // Boot the ADDITIVE patient-lifecycle engine (reminders / confirms /
   // reviews / recare). Self-disables if DATABASE_URL is unset — the
   // inbound voice flow above is completely unaffected either way.
