@@ -1626,4 +1626,4 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   ws.on('error', (err) => console.error('[WS] Error:', err.message));
 }
 
-module.exports = { handleCallStream };
+module.exports = { handleCallStream, fetchTelnyxRecordingUrl };

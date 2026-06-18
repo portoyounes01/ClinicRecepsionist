@@ -388,12 +388,17 @@ async function handleRecordingEvent(body, res) {
     const base = process.env.PUBLIC_BASE_URL || '';
     const key  = process.env.ADMIN_KEY || 'vicki2025';
     const esc  = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    // Link to OUR endpoints (they re-fetch a fresh Telnyx URL on demand) so the
+    // audio still works weeks later — Telnyx's own URL expires.
     const transcriptLink = (row?.id && base)
       ? `${base.replace(/\/$/, '')}/calls/${row.id}?key=${encodeURIComponent(key)}`
       : null;
+    const audioLink = (row?.id && base)
+      ? `${base.replace(/\/$/, '')}/calls/${row.id}/audio?key=${encodeURIComponent(key)}`
+      : recordingUrl;
     const msg = [
       `🎧 <b>Gravação pronta</b> — ${esc(row?.patient_name || 'Desconhecido')} (${esc(row?.caller_number || '?')})`,
-      `▶️ <a href="${esc(recordingUrl)}">Ouvir gravação</a>`,
+      `▶️ <a href="${esc(audioLink)}">Ouvir gravação</a>`,
       transcriptLink ? `📄 <a href="${esc(transcriptLink)}">Ver transcrição</a>` : null,
     ].filter(Boolean).join('\n');
     telegram.notify(msg, { parse_mode: 'HTML', disable_web_page_preview: true }).catch(() => {});
@@ -430,9 +435,14 @@ app.get('/calls/:id', async (req, res) => {
       return `<div class="turn ${cls}"><span class="who">${who}</span><div class="bubble">${esc(m.content)}</div></div>`;
     }).join('\n');
 
-  const recording = row.recording_url
-    ? `<audio controls preload="none" src="${esc(row.recording_url)}" style="width:100%;margin:12px 0"></audio>
-       <p><a href="${esc(row.recording_url)}">Descarregar gravação</a></p>`
+  // Always point the player at our own /audio endpoint, which fetches a FRESH
+  // Telnyx URL on demand — Telnyx's stored URLs are signed and expire, so old
+  // calls lost their audio. The transcript (text in the DB) never expires.
+  const audioKey = encodeURIComponent(process.env.ADMIN_KEY || 'vicki2025');
+  const hasAudio = row.recording_url || row.telnyx_call_sid;
+  const recording = hasAudio
+    ? `<audio controls preload="none" src="/calls/${esc(row.id)}/audio?key=${audioKey}" style="width:100%;margin:12px 0"></audio>
+       <p><a href="/calls/${esc(row.id)}/audio?key=${audioKey}">Descarregar gravação</a></p>`
     : `<p style="color:#888">Gravação ainda não disponível (ou desativada).</p>`;
 
   res.type('html').send(`<!doctype html><html lang="pt"><head><meta charset="utf-8">
@@ -464,6 +474,32 @@ app.get('/calls/:id', async (req, res) => {
     ${turns || '<p style="color:#888">Sem turnos de conversa.</p>'}
   </div>
 </body></html>`);
+});
+
+// ─────────────────────────────────────────────
+// CALL AUDIO — GET /calls/:id/audio?key=ADMIN_KEY
+// Fetches a FRESH Telnyx recording URL on demand (their stored URLs expire)
+// and redirects to it. Falls back to the stored recording_url. Gated by key.
+// ─────────────────────────────────────────────
+app.get('/calls/:id/audio', async (req, res) => {
+  if (req.query.key !== (process.env.ADMIN_KEY || 'vicki2025')) return res.status(403).send('Forbidden');
+  const db = require('./db');
+  if (!db.isEnabled()) return res.status(503).send('Database disabled');
+  let row;
+  try { row = await db.one(`SELECT recording_url, telnyx_call_sid FROM call_logs WHERE id=$1`, [req.params.id]); }
+  catch (e) { return res.status(500).send('DB error'); }
+  if (!row) return res.status(404).send('Call not found');
+
+  let url = null;
+  if (row.telnyx_call_sid) {
+    try {
+      const { fetchTelnyxRecordingUrl } = require('./callHandler');
+      url = await fetchTelnyxRecordingUrl(row.telnyx_call_sid); // fresh signed URL
+    } catch (e) { console.error('[Audio] fresh fetch failed:', e.message); }
+  }
+  url = url || row.recording_url; // fallback to the stored (possibly expired) URL
+  if (!url) return res.status(404).send('Recording not available');
+  res.redirect(302, url);
 });
 
 
