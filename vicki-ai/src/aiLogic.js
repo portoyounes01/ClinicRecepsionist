@@ -248,16 +248,20 @@ function humanSlot(isoString, lang = 'pt') {
   const weekday   = date.toLocaleDateString(locale, { weekday: 'long' });
   const monthName = date.toLocaleDateString(locale, { month: 'long' });
 
+  // Always include the calendar date for any specific weekday — "esta sexta-feira"
+  // alone is ambiguous (which Friday?) and confused callers (Joana/Dra Carla).
+  // hoje/amanhã stay bare (already unambiguous). Within-week now reads
+  // "esta sexta-feira, dia 23 de julho"; beyond a week keeps the full date too.
   let dayName;
   if (en) {
     if      (diffDays === 0) dayName = 'today';
     else if (diffDays === 1) dayName = 'tomorrow';
-    else if (diffDays <= 6)  dayName = `this ${weekday}`;
+    else if (diffDays <= 6)  dayName = `this ${weekday}, ${monthName} ${day}`;
     else                     dayName = `${weekday}, ${monthName} ${day}`;
   } else {
     if      (diffDays === 0) dayName = 'hoje';
     else if (diffDays === 1) dayName = 'amanhã';
-    else if (diffDays <= 6)  dayName = `esta ${weekday}`;
+    else if (diffDays <= 6)  dayName = `esta ${weekday}, dia ${day} de ${monthName}`;
     else                     dayName = `${weekday}, dia ${day} de ${monthName}`;
   }
 
