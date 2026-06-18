@@ -2809,10 +2809,17 @@ async function processTurn({
   // Catches ALL cases where AI confirmed booking but never called book_appointment:
   //   - action='none'   → AI spoke "Está tudo tratado!" without booking
   //   - action='hangup' → AI hung up after "Sim." without ever booking (this bug!)
+  // MANDATORY for NEW patients too: previously gated on patient?.patientId, so a
+  // new caller (no record) confirming a slot never fired book_appointment — Vicki
+  // dropped the booking or falsely said "marcada" (call #48). Now the booking
+  // agent enters the guard with OR without a patientId; book_appointment routes
+  // through resolvePatientForBooking which, with NO name, ASKS for it ("pode
+  // dizer-me o seu nome completo?") then CREATES the file before booking. No name
+  // → no booking → never a false confirmation.
   if (
     (currentAgent === 'booking' || currentAgent === 'info' || currentAgent === 'family') &&
     pendingSlots?.length > 0 &&
-    patient?.patientId &&
+    (patient?.patientId || currentAgent === 'booking') &&
     (action === 'none' || action === 'hangup' || action === 'book_appointment')
   ) {
     // The patient does NOT have to recite a phrase. A plain "sim" right after Vicki
@@ -2864,7 +2871,7 @@ async function processTurn({
       else if (isManha && !isTarde) inferredPeriod = 'manhã';
       else if (isTarde) inferredPeriod = 'tarde';
     }
-    console.log(`[Guard] CONFIRMED → book_appointment now (one yes → one book). ID: ${patient.patientId}, inferredPeriod: ${inferredPeriod || '(unknown)'}`);
+    console.log(`[Guard] CONFIRMED → book_appointment now (one yes → one book). ID: ${patient?.patientId || '(new patient — will collect name + create file)'}, inferredPeriod: ${inferredPeriod || '(unknown)'}`);
     action = 'book_appointment';
     params = { ...params, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText };
     if (inferredPeriod) params.chosenPeriod = inferredPeriod;
