@@ -554,6 +554,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let endpointGraceTimer  = null;   // pending grace wait when a phrase sounds unfinished
   let consecutiveReprompts = 0;     // back-to-back low-confidence "didn't catch that" count
                                     // — breaks the "What?/Sorry?" feedback loop
+  let totalReprompts      = 0;      // TOTAL "didn't catch that" this call — does NOT reset.
+                                    // consecutiveReprompts resets whenever a real turn fires,
+                                    // so a caller alternating clear+unclear could loop forever
+                                    // (RICARDO #38). This hard cap escalates regardless.
 
   const callStartTime     = Date.now();
   let lastSpeechTime      = Date.now(); // tracks last patient utterance
@@ -907,11 +911,12 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           console.log(`[STT] Low confidence (${confidence.toFixed(2)}) ignored — already speaking: "${candidate}"`);
           return;
         }
-        // Break the "What?/Sorry?" feedback loop: after 2 reprompts in a row,
-        // DON'T go silent (that stranded a caller who kept repeating — RICARDO,
-        // call #38). Transfer to a human instead. STT can't hear them; a person can.
-        if (consecutiveReprompts >= 2) {
-          console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — ${consecutiveReprompts} reprompts already → transferring to human: "${candidate}"`);
+        // Escalate when stuck: 2 reprompts IN A ROW, OR 3 TOTAL this call (the
+        // latter catches the forever-loop where consecutiveReprompts kept resetting
+        // because clear turns fired in between — RICARDO #38). DON'T go silent
+        // (that stranded him); transfer to a human — STT can't hear them, a person can.
+        if (consecutiveReprompts >= 2 || totalReprompts >= 3) {
+          console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — consec=${consecutiveReprompts} total=${totalReprompts} → transferring to human: "${candidate}"`);
           const handoff = languageState === 'en'
             ? "I'm sorry, the line isn't clear and I'm having trouble hearing you. One moment, I'll pass you to a colleague."
             : 'Peço desculpa, a linha não está clara e estou com dificuldade em ouvi-lo. Aguarde um momento, vou passar a um colega.';
@@ -933,7 +938,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           return;
         }
         consecutiveReprompts++;
-        console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat (#${consecutiveReprompts}): "${candidate}"`);
+        totalReprompts++; // never reset — hard ceiling against the resetting-counter loop
+        console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat (consec #${consecutiveReprompts}, total ${totalReprompts}): "${candidate}"`);
         isSpeaking = true;
         const repromptLine = languageState === 'en' ? 'Sorry, I didn\'t quite catch that. Could you repeat, please?' : 'Desculpe, não percebi bem. Pode repetir, por favor?';
         // Log every reprompt to the transcript (was previously spoken-but-unlogged,
