@@ -263,6 +263,12 @@ function isBackchannel(text) {
 // phrase LOOKS unfinished (ends on a connector/preposition/filler), we wait a brief
 // grace for them to continue; complete-sounding phrases still fire instantly (speed).
 const ENDPOINT_GRACE_MS = Math.max(0, parseInt(process.env.ENDPOINT_GRACE_MS || '700', 10));
+// How long Soniox waits after silence before declaring the turn finished. Raised
+// from 500ms → 900ms so a mid-sentence pause doesn't cut the caller off. Env-tunable.
+const MAX_ENDPOINT_DELAY_MS = Math.max(300, parseInt(process.env.MAX_ENDPOINT_DELAY_MS || '900', 10));
+// Small grace given even to COMPLETE-looking longer phrases (>3 words), so a pause
+// after a content word ("...uma consulta [pause] para amanhã") isn't fired instantly.
+const COMPLETE_PHRASE_GRACE_MS = Math.max(0, parseInt(process.env.COMPLETE_PHRASE_GRACE_MS || '500', 10));
 const INITIAL_RING_DELAY_MS = Math.max(0, parseInt(process.env.INITIAL_RING_DELAY_MS || '4000', 10));
 // Deliberate pause after the "let me check the availability" line finishes, before
 // Vicki reads the slots — so she sounds like a human looking it up instead of
@@ -798,7 +804,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         language_hints:           ['pt', 'en'],
         enable_interim_results:   true,
         enable_endpoint_detection: true,              // KEY: sends <end> token on silence → instant trigger
-        max_endpoint_delay_ms:    500,                // max wait before forcing endpoint (500-3000ms)
+        // Wait this long after silence before calling the turn done. 500ms cut
+        // callers off mid-sentence (they pause to think). 900ms default; tune live
+        // via MAX_ENDPOINT_DELAY_MS without a redeploy.
+        max_endpoint_delay_ms:    MAX_ENDPOINT_DELAY_MS,
         context: {
           entries: contextWords.map(w => ({ value: w })),
         },
@@ -954,11 +963,19 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // ("sim, de tarde"). Kept at 1.0× (not 1.5×) so common confirmations like
       // "yes"/"okay" don't add ~500ms of dead air before Vicki responds.
       const candidateWords = candidate.split(/\s+/).filter(Boolean).length;
-      const shortPhraseGrace = candidateWords <= 3 ? ENDPOINT_GRACE_MS : 0;
+      // Decide how long to wait before treating the turn as finished:
+      //  - incomplete (dangling connector/filler) → full grace (likely mid-thought)
+      //  - short phrase (≤3 words) → full grace (may precede more: "sim, de tarde")
+      //  - complete-looking LONGER phrase → a SHORT grace, so a natural pause after a
+      //    content word ("...uma consulta [pause] para amanhã") isn't fired instantly
+      //    and the caller isn't cut off. Set COMPLETE_PHRASE_GRACE_MS=0 to disable.
+      let graceMs = 0, reason = 'complete';
+      if (looksIncomplete(candidate))      { graceMs = ENDPOINT_GRACE_MS; reason = 'incomplete phrase'; }
+      else if (candidateWords <= 3)        { graceMs = ENDPOINT_GRACE_MS; reason = `short phrase ${candidateWords}w`; }
+      else if (COMPLETE_PHRASE_GRACE_MS>0) { graceMs = COMPLETE_PHRASE_GRACE_MS; reason = `complete ${candidateWords}w (anti-interrupt)`; }
 
-      if (looksIncomplete(candidate) || shortPhraseGrace > 0) {
-        const graceMs = looksIncomplete(candidate) ? ENDPOINT_GRACE_MS : shortPhraseGrace;
-        console.log(`[STT] Waiting ${graceMs}ms before firing (${looksIncomplete(candidate) ? 'incomplete phrase' : `short phrase ${candidateWords}w`}): "${candidate}"`);
+      if (graceMs > 0) {
+        console.log(`[STT] Waiting ${graceMs}ms before firing (${reason}): "${candidate}"`);
         clearTimeout(endpointGraceTimer);
         endpointGraceTimer = setTimeout(() => {
           endpointGraceTimer = null;
@@ -973,7 +990,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         return;
       }
 
-      // Sounds complete → fire now (no added latency).
+      // Sounds complete and grace disabled → fire now (no added latency).
       clearTimeout(endpointGraceTimer); endpointGraceTimer = null;
       turnBuffer = '';
       console.log(`[STT] ENDPOINT DETECTED → AI Processing: "${candidate}"`);
