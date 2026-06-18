@@ -569,6 +569,34 @@ function lastAssistantSpeak(history) {
   return '';
 }
 
+// Count how many times in this call Vicki OFFERED a slot ("tenho disponível…/I have…
+// Qual prefere?/Which would you prefer?") and the patient's reply REJECTED it
+// ("não, outro dia", "later", "another"). Used to escalate to a human after too
+// many rejected suggestions instead of looping forever (JOANA / Dra Carla call #49).
+function countSlotRejections(history) {
+  const isOffer = s => /\b(tenho disponivel|tenho vaga|i have (this|available)|qual prefere|which would you prefer|posso marcar para si)\b/i
+    .test(normalizeForIntent(s || ''));
+  const isReject = s => {
+    const t = normalizeForIntent(s || '');
+    return /^(nao|no|nope)\b/.test(t)
+      || /\b(outro|outra|another|other|mais tarde|later|mais para a frente|mais cedo|earlier|nesse dia nao|esse dia nao|nao quero (o |esse )?dia|para alem (do|de)|depois do dia|nao serve|nao da)\b/.test(t);
+  };
+  let count = 0;
+  for (let i = 0; i < history.length - 1; i++) {
+    const m = history[i];
+    if (m.role !== 'assistant') continue;
+    let speak = '';
+    try { speak = JSON.parse(m.content).speak || ''; } catch (_) { continue; }
+    if (!isOffer(speak)) continue;
+    // find the next user turn after this offer
+    for (let j = i + 1; j < history.length; j++) {
+      if (history[j].role === 'user') { if (isReject(history[j].content)) count++; break; }
+      if (history[j].role === 'assistant') break;
+    }
+  }
+  return count;
+}
+
 // Accumulate the family-booking state from the family agent's emitted params
 // across the whole call. The agent re-states what it knows each turn; we keep
 // the latest non-empty value of each field so a booking has the full picture
@@ -2440,6 +2468,25 @@ async function processTurn({
       const parsed = { speak: tSpeak, action: 'transfer_to_human', intent: 'human', params: {} };
       history.push({ role: 'assistant', content: JSON.stringify(parsed) });
       console.log(`[Guard] STUCK LOOP (lastTwoSame=${lastTwoSame}, unclearTurns=${unclearTurns}) → transfer_to_human`);
+      return finalize({ speak: tSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0, bookingReasonText });
+    }
+  }
+
+  // ── TOO MANY REJECTED DATES → transfer (JOANA / Dra Carla #49) ───────────────
+  // If the caller has already rejected the offered slots several times and is
+  // rejecting again now, stop re-offering and pass to the team to find a date —
+  // never loop suggestions forever. Booking-side only; emergency exempt.
+  if ((currentAgent === 'booking' || currentAgent === 'appointments') && currentAgent !== 'emergency') {
+    const nowRejecting = /^(nao|no|nope)\b/.test(normalizeForIntent(userText))
+      || /\b(outro|outra|another|other|mais tarde|later|mais para a frente|mais cedo|earlier|nao quero|para alem (do|de)|depois do dia|nao serve|nao da)\b/.test(normalizeForIntent(userText));
+    const priorRejections = countSlotRejections(history);
+    if (nowRejecting && priorRejections >= 2) { // this rejection makes 3+
+      const tSpeak = nextLanguageState === 'en'
+        ? "I want to get you the right date — let me pass you to a colleague who can find the best time for you. One moment."
+        : 'Quero encontrar a data certa para si — vou passar a um colega que trata de lhe encontrar a melhor hora. Um momento, por favor.';
+      const parsed = { speak: tSpeak, action: 'transfer_to_human', intent: 'human', params: {} };
+      history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+      console.log(`[Guard] ${priorRejections}+ slot rejections → transfer_to_human`);
       return finalize({ speak: tSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0, bookingReasonText });
     }
   }
