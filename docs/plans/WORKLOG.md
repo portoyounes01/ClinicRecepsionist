@@ -2,6 +2,34 @@
 
 > **Purpose:** running record of what we're doing, decisions made, and findings — so any new chat or agent can read this + [ROADMAP.md](ROADMAP.md) and instantly know the current state. Newest entries at the top.
 
+## 2026-06-17 (later) — RICARDO #38 forever-loop: STT reprompt had NO working escape
+
+Caller kept saying "confirmar a consulta de amanhã"; Vicki repeated the EXACT same
+"Desculpe, não percebi bem, pode repetir?" forever until HE hung up. DB transcript
+showed only 3 user turns, ZERO assistant turns — her repeats were never logged.
+
+Root cause = the low-STT-confidence reprompt path (callHandler ~901, fires on
+confidence<0.55 && wordCount<=4, speaks a FIXED string). Why it never escaped:
+- `consecutiveReprompts` (cap at 2) RESETS to 0 whenever a real turn fires → a
+  caller alternating clear/unclear fragments resets it forever → cap never hit.
+- Silence watchdog (90s) never fired because `lastSpeechTime` updates on EVERY STT
+  msg incl. low-confidence ones — he was talking, just misheard, so never "silent".
+- Max-duration (15min) irrelevant (call was 28s).
+- The reprompts weren't pushed to conversationHistory → invisible in logs AND
+  hidden from the history-based STUCK-LOOP detector.
+
+Fixes (additive, callHandler audio layer — NOT gym-testable):
+1. Reprompts now pushed to conversationHistory (visible + detectable).
+2. New `totalReprompts` counter, NEVER reset → escalate to human at 2-consecutive
+   OR 3-total "didn't understand". This is the only backstop that catches an
+   actively-talking-but-misheard caller.
+3. After the cap, transfer to a human (was: go silent, which stranded the caller).
+
+Deeper cause is 8kHz audio + short pt-PT utterances = genuinely low STT confidence.
+Reprompt fix stops the bad UX; raising STT accuracy (16kHz/context weighting) is the
+separate lever (user asked about it; no codec change made — needs to know if calls
+arrive over wideband vs plain mobile PSTN first).
+
 ## 2026-06-17 — Fix two prod failures from JEANINE's calls + confirm/cancel/voice polish
 
 Audited today's 5 calls (call_logs ids 27–31). Two real fuck-ups, both fixed + pushed:
