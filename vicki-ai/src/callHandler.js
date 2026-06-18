@@ -239,6 +239,22 @@ function claimsCancelDone(text) {
   return /(\bcancelad[ao]\b|\bcancelled\b|\bcanceled\b|consulta\s+cancelada)/i.test(text || '');
 }
 
+// MANDATORY anti-lie guard. Vicki must NEVER tell a patient an appointment is
+// booked/cancelled unless the REAL Newsoft action actually fired this turn.
+// Returns a SAFE replacement line if the speak makes a false claim, else null.
+// Applied to EVERY speak path (main + autoSpeak) so a false "marcada" can't slip
+// out via a path that skipped the check (call #48: booked claim, actionFired=null).
+function sanitizeFalseClaim(speak, actionFired, lang) {
+  if (!speak) return null;
+  const backedByBooking = actionFired === 'book_appointment' || actionFired === 'confirm_appointment';
+  const falseBooking = claimsBookingDone(speak) && !backedByBooking;
+  const falseCancel  = claimsCancelDone(speak)  && actionFired !== 'cancel_appointment';
+  if (!falseBooking && !falseCancel) return null;
+  return lang === 'en'
+    ? 'Let me confirm that for you — one moment.'
+    : 'Deixe-me confirmar isso para si, um momento.';
+}
+
 // ── Turn-taking config ──────────────────────────────────────────────────────
 // While Vicki is speaking the mic is CLOSED — anything heard during her turn is
 // discarded, so she finishes her full utterance and never answers things said over
@@ -1137,16 +1153,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // If Vicki's line says it's booked/cancelled but no real book_appointment /
       // cancel_appointment fired this turn, replace the false claim and don't hang up.
       if (result.speak) {
-        // A "confirmada" line is legitimate after a real confirm_appointment OR a
-        // book_appointment — only suppress it when neither action actually fired.
-        const backedByRealAction = result.actionFired === 'book_appointment' || result.actionFired === 'confirm_appointment';
-        const falseBooking = claimsBookingDone(result.speak) && !backedByRealAction;
-        const falseCancel  = claimsCancelDone(result.speak)  && result.actionFired !== 'cancel_appointment';
-        if (falseBooking || falseCancel) {
-          console.warn(`[Guard] Suppressed FALSE ${falseBooking ? 'booking' : 'cancel'} claim (actionFired=${result.actionFired}): "${result.speak}"`);
-          result.speak  = (languageState === 'en')
-            ? 'Let me confirm that for you — one moment.'
-            : 'Deixe-me confirmar isso para si, um momento.';
+        const safe = sanitizeFalseClaim(result.speak, result.actionFired, languageState);
+        if (safe) {
+          console.warn(`[Guard] Suppressed FALSE claim (actionFired=${result.actionFired}): "${result.speak}"`);
+          result.speak = safe;
           if (result.action === 'hangup') result.action = 'none';
         }
       }
@@ -1290,6 +1300,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           if (autoResult.clearReturn)   { returnToAgent = null; returnContext = {}; }
           if (autoResult.patient?.patientId) { patient = autoResult.patient; }
           if (autoResult.speak) {
+            // MANDATORY: never let a false "booked/cancelled" claim out on the
+            // autoSpeak path (it bypassed the main guard — call #48).
+            const safe = sanitizeFalseClaim(autoResult.speak, autoResult.actionFired, languageState);
+            if (safe) { console.warn(`[Guard] Suppressed FALSE claim on autoSpeak (actionFired=${autoResult.actionFired}): "${autoResult.speak}"`); autoResult.speak = safe; if (autoResult.action === 'hangup') autoResult.action = 'none'; }
             await speakNow(autoResult.speak, () => { isSpeaking = false; currentAbort = null; });
           } else {
             isSpeaking = false; currentAbort = null;
