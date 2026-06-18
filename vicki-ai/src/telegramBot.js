@@ -267,6 +267,8 @@ function start() {
   // Set the Menu commands (shows "Menu" button in Telegram chat bar)
   bot.setMyCommands([
     { command: 'status',  description: '📊 Today\'s call stats' },
+    { command: 'today',   description: '📈 Resumo de hoje (concluídas)' },
+    { command: 'month',   description: '🗓 Resumo do mês' },
     { command: 'report',  description: '🔍 Run analysis now' },
     { command: 'pending', description: '⏳ Review pending fixes' },
     { command: 'start',   description: '👋 Welcome & help' },
@@ -323,6 +325,18 @@ function start() {
   });
 
   bot.onText(/\/status/, (msg)  => { if (!guard(msg)) return; sendStatus(msg.chat.id); });
+
+  // New stats digests (use the corrected "completed" = booked+cancelled+confirmed+info)
+  bot.onText(/\/today/, async (msg) => {
+    if (!guard(msg)) return;
+    try { const text = await require('./statsDigest').buildDigest('today'); bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' }); }
+    catch (e) { bot.sendMessage(msg.chat.id, `❌ ${e.message}`); }
+  });
+  bot.onText(/\/month/, async (msg) => {
+    if (!guard(msg)) return;
+    try { const text = await require('./statsDigest').buildDigest('thisMonth'); bot.sendMessage(msg.chat.id, text, { parse_mode: 'HTML' }); }
+    catch (e) { bot.sendMessage(msg.chat.id, `❌ ${e.message}`); }
+  });
 
   bot.onText(/\/report/, (msg)  => {
     if (!guard(msg)) return;

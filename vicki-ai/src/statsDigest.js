@@ -60,6 +60,26 @@ function formatDigest(title, s) {
   ].join('\n');
 }
 
+// Build the digest text for a period: 'today' | 'thisMonth' | 'lastMonth'.
+// Returns a ready-to-send HTML string (or a friendly "no calls" message).
+async function buildDigest(period = 'today') {
+  let whereSql, title;
+  if (period === 'thisMonth') {
+    whereSql = `WHERE created_at >= date_trunc('month', now() AT TIME ZONE 'Europe/Lisbon') AT TIME ZONE 'Europe/Lisbon'`;
+    title = 'Resumo do mês (até agora)';
+  } else if (period === 'lastMonth') {
+    whereSql = `WHERE created_at >= date_trunc('month', now() AT TIME ZONE 'Europe/Lisbon') - interval '1 month'
+                  AND created_at <  date_trunc('month', now() AT TIME ZONE 'Europe/Lisbon')`;
+    title = 'Resumo mensal';
+  } else {
+    whereSql = `WHERE created_at >= date_trunc('day', now() AT TIME ZONE 'Europe/Lisbon') AT TIME ZONE 'Europe/Lisbon'`;
+    title = 'Resumo do dia';
+  }
+  const s = await computeStats(whereSql, []);
+  if (s.total === 0) return `📊 <b>${title}</b>\nSem chamadas neste período.`;
+  return formatDigest(title, s);
+}
+
 async function sendDaily() {
   if (!db.isEnabled()) return;
   const { notify } = require('./telegramBot');
@@ -76,12 +96,9 @@ async function sendMonthly() {
   if (!db.isEnabled()) return;
   const { notify } = require('./telegramBot');
   try {
-    // Previous calendar month (runs on the 1st).
-    const s = await computeStats(
-      `WHERE created_at >= date_trunc('month', now() AT TIME ZONE 'Europe/Lisbon') - interval '1 month'
-         AND created_at <  date_trunc('month', now() AT TIME ZONE 'Europe/Lisbon')`, []);
-    await notify(formatDigest('Resumo mensal', s), { parse_mode: 'HTML' });
-    console.log(`[Stats] Monthly digest sent (${s.total} calls, ${s.completionRate}% completed)`);
+    const msg = await buildDigest('lastMonth');
+    await notify(msg, { parse_mode: 'HTML' });
+    console.log('[Stats] Monthly digest sent');
   } catch (e) { console.error('[Stats] Monthly digest failed:', e.message); }
 }
 
@@ -110,4 +127,4 @@ function scheduleDigests() {
   console.log(`[Stats] Digest scheduler started (daily ${DAILY_HOUR}:00, monthly on the 1st)`);
 }
 
-module.exports = { scheduleDigests, sendDaily, sendMonthly, computeStats };
+module.exports = { scheduleDigests, sendDaily, sendMonthly, computeStats, buildDigest };
