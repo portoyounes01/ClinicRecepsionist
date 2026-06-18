@@ -908,15 +908,38 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           return;
         }
         // Break the "What?/Sorry?" feedback loop: after 2 reprompts in a row,
-        // stay silent and let the caller lead instead of re-prompting forever.
+        // DON'T go silent (that stranded a caller who kept repeating — RICARDO,
+        // call #38). Transfer to a human instead. STT can't hear them; a person can.
         if (consecutiveReprompts >= 2) {
-          console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — ${consecutiveReprompts} reprompts already, staying silent: "${candidate}"`);
+          console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — ${consecutiveReprompts} reprompts already → transferring to human: "${candidate}"`);
+          const handoff = languageState === 'en'
+            ? "I'm sorry, the line isn't clear and I'm having trouble hearing you. One moment, I'll pass you to a colleague."
+            : 'Peço desculpa, a linha não está clara e estou com dificuldade em ouvi-lo. Aguarde um momento, vou passar a um colega.';
+          // Log to transcript so it's visible + audited (these reprompts were
+          // previously spoken but NEVER written to history — invisible in logs).
+          try { conversationHistory.push({ role: 'assistant', content: JSON.stringify({ speak: handoff, action: 'transfer_to_human' }) }); } catch (_) {}
+          isSpeaking = true;
+          speakToCaller(handoff, () => {
+            isSpeaking = false; currentAbort = null;
+            if (!callEnding) {
+              callEnding = true;
+              try { clearTimeout(maxDurationWatchdog); } catch (_) {}
+              try { clearInterval(silenceWatchdog); } catch (_) {}
+              const transferNumber = process.env.CLINIC_PHONE_MOBILE || '+351962432761';
+              if (callSid) transferCalls.set(callSid, transferNumber);
+              setTimeout(() => { try { ws.close(); } catch (_) {} }, 500);
+            }
+          });
           return;
         }
         consecutiveReprompts++;
         console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat (#${consecutiveReprompts}): "${candidate}"`);
         isSpeaking = true;
-        speakToCaller(languageState === 'en' ? 'Sorry, I didn\'t quite catch that. Could you repeat, please?' : 'Desculpe, não percebi bem. Pode repetir, por favor?', () => { isSpeaking = false; currentAbort = null; });
+        const repromptLine = languageState === 'en' ? 'Sorry, I didn\'t quite catch that. Could you repeat, please?' : 'Desculpe, não percebi bem. Pode repetir, por favor?';
+        // Log every reprompt to the transcript (was previously spoken-but-unlogged,
+        // which made these calls look empty AND hid them from the loop detector).
+        try { conversationHistory.push({ role: 'assistant', content: JSON.stringify({ speak: repromptLine, action: 'none' }) }); } catch (_) {}
+        speakToCaller(repromptLine, () => { isSpeaking = false; currentAbort = null; });
         return;
       }
 
@@ -1392,7 +1415,10 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // Only speak the error reprompt if nothing else already spoke this turn
       // (a bridge/early-speak/filler) — avoids overlapping audio that cuts out.
       if (!speakStarted && !patienceFired) {
-        await speakNow(languageState === 'en' ? 'Sorry, I didn\'t quite catch that — could you repeat?' : 'Desculpe, não percebi bem — importa-se de repetir?', () => { isSpeaking = false; currentAbort = null; });
+        const errReprompt = languageState === 'en' ? 'Sorry, I didn\'t quite catch that — could you repeat?' : 'Desculpe, não percebi bem — importa-se de repetir?';
+        // Log it (was spoken-but-unlogged → invisible in transcripts + hidden from the loop detector).
+        try { conversationHistory.push({ role: 'assistant', content: JSON.stringify({ speak: errReprompt, action: 'none' }) }); } catch (_) {}
+        await speakNow(errReprompt, () => { isSpeaking = false; currentAbort = null; });
       }
       isSpeaking = false;
     }
