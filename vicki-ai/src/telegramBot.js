@@ -17,7 +17,12 @@ const { execSync } = require('child_process');
 const DATA_DIR    = path.join(__dirname, '../data');
 const PENDING_FILE = path.join(DATA_DIR, 'pending_approvals.json');
 const LOG_FILE     = path.join(DATA_DIR, 'call_log.jsonl');
+const ALLOWLIST_FILE = path.join(DATA_DIR, 'telegram_allowlist.json');
 const ROOT_DIR     = path.join(__dirname, '../..');
+
+// Secret join code: anyone who sends /start<JOIN_SECRET> is added to the allowlist.
+// Override in Railway via TELEGRAM_JOIN_SECRET.
+const JOIN_SECRET = process.env.TELEGRAM_JOIN_SECRET || '923124786';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -36,6 +41,38 @@ function savePending(items) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     fs.writeFileSync(PENDING_FILE, JSON.stringify(items, null, 2));
   } catch (e) { console.error('[Telegram] savePending error:', e.message); }
+}
+
+// ─── Allowlist store (who can use & receive Vicki updates) ────────────────────
+// Always seeded with the original manager from TELEGRAM_CHAT_ID. Members added
+// via the /start<JOIN_SECRET> code persist here.
+function loadAllowlist() {
+  const ids = new Set();
+  const seed = process.env.TELEGRAM_CHAT_ID;
+  if (seed) ids.add(String(seed));
+  try {
+    if (fs.existsSync(ALLOWLIST_FILE)) {
+      const arr = JSON.parse(fs.readFileSync(ALLOWLIST_FILE, 'utf8'));
+      if (Array.isArray(arr)) arr.forEach(id => ids.add(String(id)));
+    }
+  } catch (e) { console.error('[Telegram] loadAllowlist error:', e.message); }
+  return ids;
+}
+
+function isAllowed(chatId) {
+  return loadAllowlist().has(String(chatId));
+}
+
+// Returns true if newly added, false if already present.
+function addToAllowlist(chatId) {
+  const ids = loadAllowlist();
+  if (ids.has(String(chatId))) return false;
+  ids.add(String(chatId));
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(ALLOWLIST_FILE, JSON.stringify([...ids], null, 2));
+  } catch (e) { console.error('[Telegram] addToAllowlist error:', e.message); }
+  return true;
 }
 
 // ─── Send a fix request with ✅/❌ buttons ────────────────────────────────────
@@ -224,7 +261,6 @@ function start() {
   }
 
   bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
-  const allowedChatId = process.env.TELEGRAM_CHAT_ID;
 
   console.log('[Telegram] Bot started ✅');
 
@@ -237,17 +273,43 @@ function start() {
   ]).then(() => console.log('[Telegram] Command menu set ✅'))
     .catch(e  => console.error('[Telegram] setMyCommands error:', e.message));
 
-  // Security — ignore messages from unknown chats
+  // Security — ignore messages from chats not on the allowlist
   const guard = (msg) => {
-    if (allowedChatId && String(msg.chat.id) !== String(allowedChatId)) {
+    if (!isAllowed(msg.chat.id)) {
       console.log(`[Telegram] Ignored message from unknown chat ${msg.chat.id}`);
       return false;
     }
     return true;
   };
 
-  bot.onText(/\/start/, (msg) => {
-    if (!guard(msg)) return;
+  // /start — plain greeting for members; /start<JOIN_SECRET> grants access.
+  bot.onText(/\/start(?:\s+|@\w+\s+)?(\S+)?/, (msg, match) => {
+    const arg = (match && match[1] ? match[1] : '').trim();
+
+    // Join-code path: works even for chats not yet on the allowlist.
+    if (arg && arg === JOIN_SECRET) {
+      const added = addToAllowlist(msg.chat.id);
+      bot.sendMessage(msg.chat.id,
+        added
+          ? `✅ *Access granted!*\n\nYou're now connected to Vicki. You'll receive every report, alert, and approval request.\n\nTry /status to see today's stats.`
+          : `✅ You already have access. Try /status.`,
+        { parse_mode: 'Markdown' }
+      );
+      console.log(`[Telegram] Chat ${msg.chat.id} joined via code (${added ? 'new' : 'existing'})`);
+      return;
+    }
+
+    // A wrong code from a non-member is rejected.
+    if (!isAllowed(msg.chat.id)) {
+      if (arg) {
+        bot.sendMessage(msg.chat.id, `❌ Invalid access code.`);
+        console.log(`[Telegram] Bad join code from chat ${msg.chat.id}`);
+      } else {
+        console.log(`[Telegram] Ignored /start from unknown chat ${msg.chat.id}`);
+      }
+      return;
+    }
+
     bot.sendMessage(msg.chat.id,
       `👋 *Hi! I'm your Vicki AI Manager.*\n\n` +
       `I watch every call, find problems, and ask your approval before changing anything.\n\n` +
@@ -314,13 +376,18 @@ function start() {
   return bot;
 }
 
-// ─── Send a notification to the manager ──────────────────────────────────────
+// ─── Broadcast a notification to every allowed chat ──────────────────────────
 function notify(text, options = {}) {
-  const chatId = process.env.TELEGRAM_CHAT_ID;
-  if (!bot || !chatId) return Promise.resolve();  // always return a Promise
-  return bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...options }).catch(e =>
-    console.error('[Telegram] notify error:', e.message)
-  );
+  const ids = [...loadAllowlist()];
+  if (!bot || !ids.length) return Promise.resolve();  // always return a Promise
+  return Promise.all(ids.map(chatId =>
+    bot.sendMessage(chatId, text, { parse_mode: 'Markdown', ...options }).catch(e =>
+      console.error(`[Telegram] notify error (${chatId}):`, e.message)
+    )
+  ));
 }
 
-module.exports = { start, notify, sendApprovalRequest, sendStatus, loadPending, savePending };
+module.exports = {
+  start, notify, sendApprovalRequest, sendStatus,
+  loadPending, savePending, loadAllowlist,
+};

@@ -40,7 +40,7 @@ function loadNewLogs(since) {
 
 // ─── Main analysis ────────────────────────────────────────────────────────────
 async function runAnalysis(isScheduled = true) {
-  const { notify, sendApprovalRequest } = require('./telegramBot');
+  const { notify, sendApprovalRequest, loadAllowlist } = require('./telegramBot');
 
   console.log('[Agent] Starting improvement analysis...');
 
@@ -126,9 +126,9 @@ async function runAnalysis(isScheduled = true) {
 
     // 2. Send each suggestion for approval (with 1s delay between them)
     if (analysis.suggestions?.length) {
-      const chatId = process.env.TELEGRAM_CHAT_ID;
+      const chatIds = [...loadAllowlist()];
       analysis.suggestions.forEach((s, i) => {
-        setTimeout(() => sendApprovalRequest(chatId, s), (i + 1) * 1500);
+        setTimeout(() => chatIds.forEach(chatId => sendApprovalRequest(chatId, s)), (i + 1) * 1500);
       });
 
       // Save to pending approvals
