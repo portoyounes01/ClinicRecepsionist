@@ -10,7 +10,9 @@
     "test:stress": "node scripts/stress-test.js",
     "test:textgym": "node scripts/textGym.js",
     "test:voicegym": "node scripts/voiceGym.js",
-    "test:gym:gate": "node scripts/textGym.js --gate",
+    "test:gym:gate": "node scripts/anti-lie.test.js && node scripts/booking-persist-it.js && node scripts/textGym.js --gate",
+    "test:anti-lie": "node scripts/anti-lie.test.js",
+    "test:booking-persist": "node scripts/booking-persist-it.js",
     "test:lifecycle": "node scripts/lifecycle-it.js"
   },
   "dependencies": {

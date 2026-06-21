@@ -35,6 +35,8 @@ async function bootLifecycle(app) {
 
   // Register job handlers from each lifecycle module.
   reminder.register();
+  // Post-call booking verification (re-reads Newsoft to confirm a claimed booking).
+  try { require('./bookingVerify').register(); } catch (e) { console.error('[Lifecycle] bookingVerify register failed:', e.message); }
   // Outbound confirm-call + reviews + recare handlers register themselves
   // when those modules are required (added in later steps).
   try { require('../outbound/voiceConfirm').register(); } catch (_) {}
@@ -43,6 +45,10 @@ async function bootLifecycle(app) {
   try { require('./reactivation').register(); } catch (_) {}
 
   scheduler.start();
+
+  // Reconciliation sweep: catch any claimed-but-unconfirmed booking and alert
+  // staff (final safety net behind the in-call + post-call verification).
+  try { require('./reconcile').start(); } catch (e) { console.error('[Lifecycle] reconcile start failed:', e.message); }
 
   // Daily sweeps for recare + reactivation (find due/dormant patients and
   // enqueue their messages). Runs once at boot, then every 24h.

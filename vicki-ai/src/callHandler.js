@@ -244,9 +244,15 @@ function claimsCancelDone(text) {
 // Returns a SAFE replacement line if the speak makes a false claim, else null.
 // Applied to EVERY speak path (main + autoSpeak) so a false "marcada" can't slip
 // out via a path that skipped the check (call #48: booked claim, actionFired=null).
-function sanitizeFalseClaim(speak, actionFired, lang) {
+function sanitizeFalseClaim(speak, actionFired, lang, bookingProof) {
   if (!speak) return null;
-  const backedByBooking = actionFired === 'book_appointment' || actionFired === 'confirm_appointment';
+  // A "booked" claim is backed ONLY by a REAL Newsoft appointmentId (or a verified
+  // confirm). `actionFired === 'book_appointment'` is NOT proof: the guard sets it on
+  // the ATTEMPTED action even when the booking bailed (new patient, name not yet
+  // collected) — that was the call #54 false "marcada".
+  const backedByBooking = !!bookingProof?.appointmentId
+    || bookingProof?.bookingVerified === true
+    || actionFired === 'confirm_appointment';
   const falseBooking = claimsBookingDone(speak) && !backedByBooking;
   const falseCancel  = claimsCancelDone(speak)  && actionFired !== 'cancel_appointment';
   if (!falseBooking && !falseCancel) return null;
@@ -566,6 +572,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let lastOfferedDate     = null;   // date of last slot shown — next search skips past it
   let bookingReasonText   = null;
   let lastActionFired     = null;   // last real API action this call (book/cancel) — proof for the transcript log
+  let lastAppointmentId   = null;   // REAL Newsoft id from a successful book — the ONLY trustworthy "was it booked"
+  let lastBookingVerifiedAt = null; // ISO timestamp if we re-read Newsoft and confirmed the appointment exists
   let returnToAgent       = null;   // agent to resume after info/insurance detour
   let returnContext       = {};     // saved pendingSlots + bookingReason for resume
   let rebookContext       = null;   // {medicId, medicName} from a cancel → reuse same doctor on rebook
@@ -642,12 +650,27 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       const link = (rowId && base)
         ? `${base.replace(/\/$/, '')}/calls/${rowId}?key=${encodeURIComponent(key)}`
         : null;
-      const outcomeEmoji = { booked: '✅', cancelled: '❌', transferred: '👤', info: 'ℹ️', abandoned: '📭' }[summary.outcome] || '📞';
+      // The LLM may label a call "booked" without a real Newsoft reservation —
+      // trust the threaded appointmentId, not summary.outcome.
+      const claimedBooked = summary.outcome === 'booked';
+      const realBooked    = !!lastAppointmentId;
+      const outcomeEmoji = claimedBooked
+        ? (realBooked ? '✅' : '⚠️')
+        : ({ cancelled: '❌', transferred: '👤', info: 'ℹ️', abandoned: '📭' }[summary.outcome] || '📞');
+      const headline = (claimedBooked && !realBooked)
+        ? 'marcação reportada mas NÃO confirmada no Newsoft'
+        : (summary.outcome || 'concluída');
+      const bookingLine = claimedBooked
+        ? (realBooked
+            ? `🆔 Marcação: ${esc(lastAppointmentId)}${lastBookingVerifiedAt ? ' (verificada no Newsoft)' : ' (a verificar)'}`
+            : '🚨 Sem reserva real no Newsoft — verificar manualmente')
+        : null;
       const mins = Math.floor((durationSeconds || 0) / 60), secs = (durationSeconds || 0) % 60;
       const msg = [
-        `${outcomeEmoji} <b>Chamada terminada</b> — ${esc(summary.outcome || 'concluída')}`,
+        `${outcomeEmoji} <b>Chamada terminada</b> — ${esc(headline)}`,
         `👤 ${esc(patient?.patientName || 'Desconhecido')}`,
         `📱 ${esc(callerNumber || '?')}  ·  ⏱ ${mins}m${String(secs).padStart(2, '0')}`,
+        bookingLine,
         summary.summary ? `📝 ${esc(summary.summary.slice(0, 200))}` : null,
         link ? `📄 <a href="${esc(link)}">Ver transcrição</a>` : '📄 transcrição: DB indisponível',
         `🎧 Gravação: a processar… (chega numa mensagem a seguir)`,
@@ -701,6 +724,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           intent:             summary.intent,
           transferredToHuman: currentAgent === 'human',
           actionFired:        lastActionFired,
+          newsoftAppointmentId: lastAppointmentId,
+          bookingVerifiedAt:  lastBookingVerifiedAt,
           durationSeconds,
           unclearTurns,
           language:           spokenLang,
@@ -1153,9 +1178,9 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // If Vicki's line says it's booked/cancelled but no real book_appointment /
       // cancel_appointment fired this turn, replace the false claim and don't hang up.
       if (result.speak) {
-        const safe = sanitizeFalseClaim(result.speak, result.actionFired, languageState);
+        const safe = sanitizeFalseClaim(result.speak, result.actionFired, languageState, { appointmentId: result.appointmentId, bookingVerified: !!result.bookingVerifiedAt });
         if (safe) {
-          console.warn(`[Guard] Suppressed FALSE claim (actionFired=${result.actionFired}): "${result.speak}"`);
+          console.warn(`[Guard] Suppressed FALSE claim (actionFired=${result.actionFired}, appointmentId=${result.appointmentId || 'none'}): "${result.speak}"`);
           result.speak = safe;
           if (result.action === 'hangup') result.action = 'none';
         }
@@ -1214,14 +1239,23 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
 
       // ── Persistent audit: Telegram notification on every booking/cancel ──
       // Railway logs vanish on redeploy — Telegram gives a permanent record.
-      if (result.actionFired === 'book_appointment' || result.actionFired === 'cancel_appointment') {
-        lastActionFired = result.actionFired; // remember for the end-of-call transcript record
+      // A BOOK only counts when Newsoft returned a real appointmentId. An
+      // attempted-but-unbooked turn (e.g. new patient before the name is
+      // collected) must NOT stamp the call as booked — that is the call #54 bug.
+      if (result.actionFired === 'cancel_appointment') {
+        lastActionFired = 'cancel_appointment';
       }
-      if (result.actionFired === 'book_appointment' && result.action !== 'transfer_to_human') {
+      if (result.actionFired === 'book_appointment' && result.appointmentId) {
+        lastActionFired   = 'book_appointment';
+        lastAppointmentId = String(result.appointmentId);
+        if (result.bookingVerifiedAt) lastBookingVerifiedAt = result.bookingVerifiedAt;
+      }
+      if (result.actionFired === 'book_appointment' && result.appointmentId && result.action !== 'transfer_to_human') {
         const ptName = patient?.patientName || 'Novo paciente';
         const msg = [
           '✅ *MARCAÇÃO CONFIRMADA*',
           `👤 Paciente: ${ptName} (ID: ${patient?.patientId || '?'})`,
+          `🆔 Marcação: ${result.appointmentId}${result.bookingVerifiedAt ? ' (verificada no Newsoft)' : ''}`,
           `📱 Tel: ${callerNumber || '?'}`,
           `🗣 Vicki disse: ${result.speak?.slice(0, 120) || '?'}`,
         ].join('\n');
@@ -1299,11 +1333,19 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           if (autoResult.returnToAgent) { returnToAgent = autoResult.returnToAgent; returnContext = autoResult.returnContext || {}; }
           if (autoResult.clearReturn)   { returnToAgent = null; returnContext = {}; }
           if (autoResult.patient?.patientId) { patient = autoResult.patient; }
+          // Capture booking proof on the autoSpeak path too (same rule as the main
+          // path): a book only counts with a real Newsoft appointmentId.
+          if (autoResult.actionFired === 'cancel_appointment') lastActionFired = 'cancel_appointment';
+          if (autoResult.actionFired === 'book_appointment' && autoResult.appointmentId) {
+            lastActionFired   = 'book_appointment';
+            lastAppointmentId = String(autoResult.appointmentId);
+            if (autoResult.bookingVerifiedAt) lastBookingVerifiedAt = autoResult.bookingVerifiedAt;
+          }
           if (autoResult.speak) {
             // MANDATORY: never let a false "booked/cancelled" claim out on the
             // autoSpeak path (it bypassed the main guard — call #48).
-            const safe = sanitizeFalseClaim(autoResult.speak, autoResult.actionFired, languageState);
-            if (safe) { console.warn(`[Guard] Suppressed FALSE claim on autoSpeak (actionFired=${autoResult.actionFired}): "${autoResult.speak}"`); autoResult.speak = safe; if (autoResult.action === 'hangup') autoResult.action = 'none'; }
+            const safe = sanitizeFalseClaim(autoResult.speak, autoResult.actionFired, languageState, { appointmentId: autoResult.appointmentId, bookingVerified: !!autoResult.bookingVerifiedAt });
+            if (safe) { console.warn(`[Guard] Suppressed FALSE claim on autoSpeak (actionFired=${autoResult.actionFired}, appointmentId=${autoResult.appointmentId || 'none'}): "${autoResult.speak}"`); autoResult.speak = safe; if (autoResult.action === 'hangup') autoResult.action = 'none'; }
             await speakNow(autoResult.speak, () => { isSpeaking = false; currentAbort = null; });
           } else {
             isSpeaking = false; currentAbort = null;
@@ -1337,7 +1379,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
                 const spokenLang = (languageState === 'en' || languageState === 'pt') ? languageState : summary.language;
                 if (patient?.patientId) updateAfterCall(patient.patientId, { patientName: patient.patientName, summary: summary.summary, intent: summary.intent, language: spokenLang, explicitDoctorPreference: summary.explicitDoctorPreference, explicitTimePreference: summary.explicitTimePreference });
                 logCallOutcome({ patientId: patient?.patientId, patientName: patient?.patientName, callerNumber, outcome: summary.outcome, intent: summary.intent, transferredToHuman: false, unclearTurns, durationSeconds, summary: summary.summary, flags: summary.flags || [] });
-                logCallTranscript({ patientId: patient?.patientId || null, patientName: patient?.patientName || 'Unknown', callerNumber, outcome: summary.outcome, intent: summary.intent, transferredToHuman: false, actionFired: lastActionFired, durationSeconds, unclearTurns, language: spokenLang, summary: summary.summary, flags: summary.flags || [], transcript: conversationHistory, telnyxCallSid: callSid }).then(rowId => notifyCallSummary(rowId, summary, durationSeconds));
+                logCallTranscript({ patientId: patient?.patientId || null, patientName: patient?.patientName || 'Unknown', callerNumber, outcome: summary.outcome, intent: summary.intent, transferredToHuman: false, actionFired: lastActionFired, newsoftAppointmentId: lastAppointmentId, bookingVerifiedAt: lastBookingVerifiedAt, durationSeconds, unclearTurns, language: spokenLang, summary: summary.summary, flags: summary.flags || [], transcript: conversationHistory, telnyxCallSid: callSid }).then(rowId => notifyCallSummary(rowId, summary, durationSeconds));
               }).catch(e => console.error('[Memory] Save error:', e.message));
             let waited2 = 0;
             const doHangup2 = () => { if (!isSpeaking || waited2 > 6000) { try { ws.close(); } catch (_) {} } else { waited2 += 200; setTimeout(doHangup2, 200); } };
@@ -1410,6 +1452,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
               intent:             summary.intent,
               transferredToHuman: currentAgent === 'human',
               actionFired:        lastActionFired,
+              newsoftAppointmentId: lastAppointmentId,
+              bookingVerifiedAt:  lastBookingVerifiedAt,
               durationSeconds,
               unclearTurns,
               language:           spokenLang,
@@ -1649,6 +1693,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
             patientId: patient?.patientId || null, patientName: patient?.patientName || 'Unknown',
             callerNumber, outcome: summary.outcome, intent: summary.intent,
             transferredToHuman: currentAgent === 'human', actionFired: lastActionFired,
+            newsoftAppointmentId: lastAppointmentId, bookingVerifiedAt: lastBookingVerifiedAt,
             durationSeconds, unclearTurns, language: spokenLang, summary: summary.summary,
             flags: summary.flags || [], transcript: conversationHistory, telnyxCallSid: callSid,
           }).then(rowId => notifyCallSummary(rowId, summary, durationSeconds));
@@ -1689,4 +1734,11 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   ws.on('error', (err) => console.error('[WS] Error:', err.message));
 }
 
-module.exports = { handleCallStream, fetchTelnyxRecordingUrl };
+module.exports = {
+  handleCallStream,
+  fetchTelnyxRecordingUrl,
+  // exported for unit tests (anti-lie guard)
+  sanitizeFalseClaim,
+  claimsBookingDone,
+  claimsCancelDone,
+};

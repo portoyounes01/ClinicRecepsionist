@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS call_logs (
   transcript           JSONB NOT NULL DEFAULT '[]', -- full conversationHistory
   telnyx_call_sid      TEXT,                 -- Telnyx call_control_id — links the recording webhook back to this row
   recording_url        TEXT,                 -- filled in later by the recording.saved webhook
+  newsoft_appointment_id TEXT,               -- REAL appointmentId Newsoft returned on a successful book (trustworthy)
+  booking_verified_at  TIMESTAMPTZ,          -- set once we re-read Newsoft and confirmed the appointment exists
   created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_call_logs_when ON call_logs (created_at DESC);
@@ -130,6 +132,13 @@ CREATE INDEX IF NOT EXISTS idx_call_logs_telnyx_sid ON call_logs (telnyx_call_si
 -- Safe re-run for DBs created before these columns existed.
 ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS telnyx_call_sid TEXT;
 ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS recording_url   TEXT;
+
+-- Verified-booking columns. newsoft_appointment_id = the REAL id Newsoft returned
+-- on a successful book (the only trustworthy "was it booked" signal — outcome is
+-- LLM self-report). booking_verified_at = we re-read Newsoft and FOUND it.
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS newsoft_appointment_id TEXT;
+ALTER TABLE call_logs ADD COLUMN IF NOT EXISTS booking_verified_at    TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_call_logs_appt ON call_logs (newsoft_appointment_id);
 
 -- ── Reviews ────────────────────────────────────────────────
 -- Drives the hosted star-form gating flow.

@@ -245,8 +245,8 @@ async function logCallTranscript(entry) {
          (clinic_id, newsoft_patient_id, patient_name, caller_number,
           outcome, intent, transferred_to_human, action_fired,
           duration_seconds, unclear_turns, language, summary, flags, transcript,
-          telnyx_call_sid)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15)
+          telnyx_call_sid, newsoft_appointment_id, booking_verified_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15,$16,$17)
        RETURNING id`,
       [
         entry.clinicId        || process.env.CLINIC_ID_SLUG || 'loule',
@@ -264,9 +264,24 @@ async function logCallTranscript(entry) {
         JSON.stringify(entry.flags || []),
         JSON.stringify(entry.transcript || []),
         entry.telnyxCallSid   || null,
+        entry.newsoftAppointmentId != null ? String(entry.newsoftAppointmentId) : null,
+        entry.bookingVerifiedAt || null,
       ]
     );
     console.log(`[Log] Call transcript persisted to DB (id=${row?.id})`);
+    // Post-call backstop: if Vicki claimed a real booking that wasn't already
+    // verified in-call, schedule a Newsoft re-check (~2 min) so a silent EHR
+    // failure can't pass as "booked". Fire-and-forget; never blocks the write.
+    if (row?.id && entry.newsoftAppointmentId && !entry.bookingVerifiedAt) {
+      Promise.resolve()
+        .then(() => require('./lifecycle/bookingVerify').scheduleVerification({
+          callLogId:     row.id,
+          clinicId:      entry.clinicId,
+          patientId:     entry.patientId,
+          appointmentId: entry.newsoftAppointmentId,
+        }))
+        .catch(e => console.error('[Log] verify enqueue failed:', e.message));
+    }
     return row?.id || null;
   } catch (e) {
     console.error('[Log] DB transcript write failed:', e.message);

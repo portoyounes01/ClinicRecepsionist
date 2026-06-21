@@ -1604,11 +1604,62 @@ async function executeAction(action, params, patient, callerNumber, history = []
         motiveName:  params.motiveName || 'Consulta',
         observation: bookingObservation(params._bookingReasonText),
       });
-      console.log(`[Booking] ✅ Confirmed appointmentId: ${booked[0]?.appointmentId}`);
+      const apptId = (booked && booked[0]) ? booked[0].appointmentId : null;
+      console.log(`[Booking] ✅ Confirmed appointmentId: ${apptId}`);
 
-      // Fire-and-forget SMS confirmation (don't block the call)
+      // ── VERIFY-AFTER-WRITE ────────────────────────────────────────────────
+      // Newsoft returning an id is necessary but NOT sufficient — re-read the
+      // patient's appointments and confirm the booking actually landed before we
+      // tell the caller "marcada". Strictly time-boxed so it never blocks audio.
+      //   • timeout / read error → fail-OPEN (keep the booking, leave unverified;
+      //     the post-call job + reconciliation sweep confirm it later).
+      //   • read returns appts but NOT this one, AND the slot is inside the read
+      //     window → fail-CLOSED: transfer to a human (the call #54 signature).
+      // Tunable / disable-able via NEWSOFT_VERIFY_MS (0 = skip the in-call read).
+      let bookingVerifiedAt = null;
+      const verifyMs = parseInt(process.env.NEWSOFT_VERIFY_MS || '1200', 10);
+      if (apptId && verifyMs > 0) {
+        const slotDate = chosenSlot?.date || null;   // 'YYYY-MM-DD'
+        const slotTime = chosenSlot?.time || null;
+        // getPatientAppointments only reads today..+90d; a booking beyond that
+        // can't be confirmed by this read, so never fail-closed on it.
+        const withinWindow = (() => {
+          if (!slotDate) return false;
+          const d = new Date(slotDate + 'T00:00:00.000');
+          const horizon = new Date(); horizon.setDate(horizon.getDate() + 88);
+          return !isNaN(d.getTime()) && d <= horizon;
+        })();
+        try {
+          const VERIFY_TIMEOUT = Symbol('verify_timeout');
+          const verifyAppts = await Promise.race([
+            newsoft.getPatientAppointments(patientForBooking.patientId),
+            new Promise(res => setTimeout(() => res(VERIFY_TIMEOUT), verifyMs)),
+          ]);
+          if (verifyAppts === VERIFY_TIMEOUT) {
+            console.warn(`[Booking] verify skipped — read exceeded ${verifyMs}ms (booking kept, unverified)`);
+          } else if (Array.isArray(verifyAppts)) {
+            const hit = verifyAppts.some(a =>
+              String(a.appointmentId) === String(apptId) ||
+              (slotDate && slotTime && String(a.appointmentDate || '').includes(slotDate) && String(a.appointmentTime || '').includes(slotTime)));
+            if (hit) {
+              bookingVerifiedAt = new Date().toISOString();
+              console.log(`[Booking] ✅ Verified in Newsoft (appointmentId=${apptId})`);
+            } else if (withinWindow) {
+              console.error(`[Booking] ❌ NOT found on re-read (appointmentId=${apptId}) — transferring to human`);
+              return { error: 'Booking not visible in Newsoft after write', needsHumanVerify: true };
+            } else {
+              console.warn(`[Booking] verify inconclusive — slot beyond read window (booking kept, unverified)`);
+            }
+          }
+        } catch (e) {
+          console.warn('[Booking] verify-after-write read failed (booking kept, unverified):', e.message);
+        }
+      }
+
+      // Fire-and-forget SMS confirmation (don't block the call). Gated on a REAL
+      // appointmentId so we never text a "confirmação" for a booking that failed.
       const smsPhone = callerNumber || patientForBooking?.patientPhoneNumber;
-      const smsSent = !!(chosenSlot && patientForBooking && smsPhone);
+      const smsSent = !!(apptId && chosenSlot && patientForBooking && smsPhone);
       if (smsSent) {
         // Queue — sent only after the call disconnects so it never garbles audio.
         queueSMS(callerNumber, () => sendBookingConfirmation({
@@ -1624,7 +1675,8 @@ async function executeAction(action, params, patient, callerNumber, history = []
       }
 
       return {
-        appointmentId: booked[0]?.appointmentId,
+        appointmentId: apptId,
+        bookingVerifiedAt,           // ISO ts if re-read confirmed it landed; null = unverified (job will confirm)
         bookedSlot:    chosenSlot,   // passed back so confirmation speaks correct doctor/time
         smsSent,                     // so the spoken confirmation only claims a text if one went out
         patient: patientForBooking,
@@ -3188,7 +3240,7 @@ async function processTurn({
               if (sFormatted._slotsContext) history.push({ role: 'system', content: `Slots disponíveis encontrados:\n${sFormatted._slotsContext}\n\nUsa o slotBase64 correto quando o paciente confirmar.` });
               if (sFormatted._appointmentsContext) history.push({ role: 'system', content: `Consultas do paciente:\n${sFormatted._appointmentsContext}` });
               history.push({ role: 'assistant', content: JSON.stringify({ speak: sFormatted.speak, action: sFormatted.action || 'none', params: {} }) });
-              return { ...finalize({ speak: sFormatted.speak, action: sFormatted.action || 'none', history, currentAgent: nextAgent, unclearTurns: 0, bookingReasonText: sUpdatedReason }), actionFired: sGuarded.action, pendingSlots: sFormatted.pendingSlots, pendingAppts: sFormatted.pendingAppointments, lastOfferedDate: sActionResult.lastOfferedDate ?? lastOfferedDate, patient: sActionResult.patient };
+              return { ...finalize({ speak: sFormatted.speak, action: sFormatted.action || 'none', history, currentAgent: nextAgent, unclearTurns: 0, bookingReasonText: sUpdatedReason }), actionFired: sGuarded.action, appointmentId: sGuarded.action === 'book_appointment' ? (sActionResult.appointmentId || null) : null, bookingVerifiedAt: sGuarded.action === 'book_appointment' ? (sActionResult.bookingVerifiedAt || null) : null, pendingSlots: sFormatted.pendingSlots, pendingAppts: sFormatted.pendingAppointments, lastOfferedDate: sActionResult.lastOfferedDate ?? lastOfferedDate, patient: sActionResult.patient };
             }
           }
         } catch (sErr) {
@@ -3362,6 +3414,10 @@ async function processTurn({
             speak:           formatted.speak,
             action:          formatted.action || 'none',
             actionFired:     action,
+            // The REAL Newsoft id (only present on a successful book) is the single
+            // source of truth that a booking happened — never `actionFired` alone.
+            appointmentId:   action === 'book_appointment' ? (actionResult.appointmentId || null) : null,
+            bookingVerifiedAt: action === 'book_appointment' ? (actionResult.bookingVerifiedAt || null) : null,
             history,
             currentAgent:    nextAgent,
             pendingSlots:    bookingSucceeded ? [] : formatted.pendingSlots,

@@ -13,35 +13,45 @@
 
 const db = require('./db');
 
-const COMPLETED_OUTCOMES = ['booked', 'cancelled', 'confirmed', 'info_given'];
+// Non-booking success outcomes. Bookings are counted from the REAL Newsoft id,
+// never from the LLM `outcome` (which can say "booked" with no real reservation).
+const COMPLETED_NONBOOK_OUTCOMES = ['cancelled', 'confirmed', 'info_given'];
 
 // Pull aggregate stats for calls in [sinceExpr, now). sinceExpr is a SQL
 // interval boundary already applied by the caller via the WHERE clause.
 async function computeStats(whereSql, params) {
   const rows = await db.many(
-    `SELECT outcome, action_fired, transferred_to_human, duration_seconds
+    `SELECT outcome, action_fired, transferred_to_human, duration_seconds,
+            booking_verified_at, newsoft_appointment_id
        FROM call_logs ${whereSql}`, params);
 
   const total = rows.length;
   const transferred = rows.filter(r => r.transferred_to_human || r.outcome === 'transferred').length;
-  const booked    = rows.filter(r => r.action_fired === 'book_appointment' || r.outcome === 'booked').length;
+  // TRUSTWORTHY booking signal: verified = re-read found it in Newsoft (headline);
+  // pending = Newsoft returned an id but not yet verified. `outcome='booked'`
+  // (LLM self-report) and `action_fired` (attempted) are NOT counted as booked.
+  const realBooking   = r => !!r.booking_verified_at || !!r.newsoft_appointment_id;
+  const booked        = rows.filter(r => !!r.booking_verified_at).length;
+  const bookedPending = rows.filter(r => !r.booking_verified_at && !!r.newsoft_appointment_id).length;
   const cancelled = rows.filter(r => r.action_fired === 'cancel_appointment' || r.outcome === 'cancelled').length;
   const confirmed = rows.filter(r => r.action_fired === 'confirm_appointment').length;
   const infoGiven = rows.filter(r => r.outcome === 'info_given').length;
   const abandoned = rows.filter(r => r.outcome === 'abandoned').length;
 
-  // Completed = resolved by Vicki (any of the success outcomes), not transferred.
+  // Completed = resolved by Vicki, not transferred. A booking counts only with a
+  // real Newsoft id (verified or pending) — never on the LLM's word alone.
   const completed = rows.filter(r =>
     !r.transferred_to_human && r.outcome !== 'transferred' &&
-    (COMPLETED_OUTCOMES.includes(r.outcome) ||
-      ['book_appointment', 'cancel_appointment', 'confirm_appointment'].includes(r.action_fired))
+    (realBooking(r) ||
+      COMPLETED_NONBOOK_OUTCOMES.includes(r.outcome) ||
+      ['cancel_appointment', 'confirm_appointment'].includes(r.action_fired))
   ).length;
 
   const noAction = total - completed - transferred - abandoned;
   const completionRate = total ? Math.round((completed / total) * 100) : 0;
   const avgDur = total ? Math.round(rows.reduce((s, r) => s + (r.duration_seconds || 0), 0) / total) : 0;
 
-  return { total, completed, completionRate, booked, cancelled, confirmed, infoGiven, transferred, abandoned, noAction: Math.max(0, noAction), avgDur };
+  return { total, completed, completionRate, booked, bookedPending, cancelled, confirmed, infoGiven, transferred, abandoned, noAction: Math.max(0, noAction), avgDur };
 }
 
 function formatDigest(title, s) {
@@ -50,7 +60,8 @@ function formatDigest(title, s) {
     `📊 <b>${title}</b>`,
     `📞 Total de chamadas: <b>${s.total}</b>`,
     `✅ Concluídas pela Vicki: <b>${s.completed}</b> (${s.completionRate}%)`,
-    `   • Marcadas: ${s.booked}`,
+    `   • Marcadas (confirmadas no Newsoft): ${s.booked}`,
+    ...(s.bookedPending ? [`   • Marcações por verificar: ${s.bookedPending}`] : []),
     `   • Canceladas: ${s.cancelled}`,
     `   • Confirmadas: ${s.confirmed}`,
     `   • Informação dada: ${s.infoGiven}`,

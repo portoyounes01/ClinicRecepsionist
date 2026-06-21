@@ -78,6 +78,10 @@ function makeProvider(config = {}) {
     urgentHasSlots = false,
     existingAppointments = [],
     doctorIds = null,
+    // When true, getPatientAppointments does NOT reflect bookings made this run —
+    // simulates Newsoft accepting the write but the re-read not showing it (the
+    // call #54 false-booking signature). Used by the verify-after-write tests.
+    hideBookedFromReadback = false,
   } = config;
 
   // mutable side-effect log the harness can inspect after a call
@@ -132,7 +136,21 @@ function makeProvider(config = {}) {
 
     // ── availability ──
     async getAvailableSlots(params)            { return generateSlots(params); },
-    async getPatientAppointments(/* id */)     { return existingAppointments; },
+    async getPatientAppointments(/* id */) {
+      // Reflect bookings made this run so verify-after-write can confirm them —
+      // unless hideBookedFromReadback is set (then we mimic Newsoft not showing it).
+      if (hideBookedFromReadback) return existingAppointments;
+      const bookedView = sideEffects.booked.map(b => {
+        const dateBegin = b.dateBegin || '';
+        return {
+          appointmentId:   b.appointmentId,
+          appointmentDate: dateBegin.split('T')[0] || null,
+          appointmentTime: (dateBegin.split('T')[1] || '').slice(0, 5) || null,
+          medicName:       b.medicName || null,
+        };
+      });
+      return [...existingAppointments, ...bookedView];
+    },
 
     // ── mutations (logged, never real) ──
     async createOrUpdatePatient(p) {
