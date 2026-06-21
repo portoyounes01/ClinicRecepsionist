@@ -61,15 +61,19 @@ async function alertMismatchOnce(row) {
   const base = (process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
   const adminKey = process.env.ADMIN_KEY || 'vicki2025';
   const link = base ? `${base}/calls/${row.id}?key=${encodeURIComponent(adminKey)}` : `call_logs id=${row.id}`;
+  // HTML (escaped) — never Markdown: patient names / the masked phone's "***" and
+  // other dynamic text break Markdown entity parsing (Telegram 400).
+  const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const when = row.created_at ? new Date(row.created_at).toISOString().slice(0, 16).replace('T', ' ') : '?';
   const msg = [
-    '🚨 *RESERVA NÃO CONFIRMADA NO NEWSOFT*',
-    `👤 ${row.patient_name || 'Desconhecido'}  📱 ${maskPhone(row.caller_number)}`,
-    `🗓 Chamada: ${row.created_at ? new Date(row.created_at).toISOString().slice(0, 16).replace('T', ' ') : '?'}`,
-    row.newsoft_appointment_id ? `🆔 Marcação alegada: ${row.newsoft_appointment_id}` : '🆔 (sem id — Vicki alegou marcação sem reserva real)',
+    '🚨 <b>RESERVA NÃO CONFIRMADA NO NEWSOFT</b>',
+    `👤 ${esc(row.patient_name || 'Desconhecido')}  📱 ${esc(maskPhone(row.caller_number))}`,
+    `🗓 Chamada: ${esc(when)}`,
+    row.newsoft_appointment_id ? `🆔 Marcação alegada: ${esc(row.newsoft_appointment_id)}` : '🆔 (sem id — Vicki alegou marcação sem reserva real)',
     'A Vicki reportou marcação mas o Newsoft não tem a consulta. Verificar manualmente.',
-    `📄 ${link}`,
-  ].join('\n');
-  try { await require('../telegramBot').notify(msg); } catch (e) { console.error('[BookingVerify] alert failed:', e.message); }
+    link ? `📄 <a href="${esc(link)}">Ver chamada</a>` : '',
+  ].filter(Boolean).join('\n');
+  try { await require('../telegramBot').notify(msg, { parse_mode: 'HTML', disable_web_page_preview: true }); } catch (e) { console.error('[BookingVerify] alert failed:', e.message); }
   return true;
 }
 
