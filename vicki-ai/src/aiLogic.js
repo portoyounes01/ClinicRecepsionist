@@ -728,6 +728,32 @@ function normalizePatientName(value) {
   return cleaned.length > 120 ? cleaned.slice(0, 120).trim() : cleaned;
 }
 
+// Conservative name extractor for the deterministic NEW-PATIENT name-capture guard.
+// Strips common PT/EN lead-ins ("chamo-me", "my name is", …) and returns a clean
+// name ONLY when the reply unambiguously looks like a name — otherwise null, so the
+// caller falls through to existing behavior and NEVER forces a wrong booking.
+function extractNewPatientName(userText) {
+  let t = (userText || '').trim();
+  if (!t || /\?/.test(t)) return null;                       // a question is never a name
+  t = t.replace(/^(ol[áa]|bom dia|boa tarde|boa noite|sim|claro|certo)[,!.\s]+/i, '')
+       .replace(/^(o\s+)?meu\s+nome\s+(completo\s+)?[ée]\s+/i, '')
+       .replace(/^chamo[\s-]?me\s+/i, '')
+       .replace(/^sou\s+(o|a)\s+/i, '')
+       .replace(/^(my\s+name\s+is|i\s*'?m|it'?s|name'?s|the\s+name'?s)\s+/i, '')
+       .replace(/[.,!]+$/, '')
+       .trim();
+  const norm = normalizePatientName(t);
+  if (!norm) return null;
+  if (/\d/.test(norm)) return null;                          // names have no digits
+  // reject rejections / fillers / standalone confirmations that aren't names
+  if (/^(n[aã]o|no|nope|talvez|maybe|n[aã]o sei|sei l[áa]|i don'?t know|sim|claro|certo|exat[oa]|exact[oa]|isso|pois|obrigad[oa]|perfeito|pronto|ok|okay|tudo bem|nada)$/i.test(norm)) return null;
+  const words = norm.split(/\s+/);
+  if (words.length < 1 || words.length > 4) return null;     // a full name is 1–4 words
+  const wordRe = /^[\p{L}][\p{L}'’.\-]*$/u;                  // alphabetic (accents/hyphen/apostrophe) only
+  if (!words.every(w => wordRe.test(w))) return null;
+  return norm;
+}
+
 function normalizePatientEmail(value) {
   if (!value || typeof value !== 'string') return null;
   const match = value.trim().match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
@@ -2883,6 +2909,38 @@ async function processTurn({
     }
   }
 
+  // ── NEW-PATIENT NAME CAPTURE (deterministic) ────────────────────────────────
+  // For a NEW caller (no patientId), the first book_appointment bails asking for
+  // the name ("…o seu nome completo?"). The NEXT utterance IS the name — but the
+  // LLM doesn't reliably re-fire book_appointment, so the slot-confirmation guard
+  // below re-asks the slot and the call loops, then transfers (novo_so_nome).
+  // Capture the name here and book deterministically. STRICTLY scoped: booking
+  // agent, slot pending, NEW patient, we asked for the name last turn, and the
+  // reply cleanly looks like a name. Existing/returning patients (have patientId)
+  // never reach this. Any uncertainty → fall through to the unchanged behavior.
+  let bookViaNameCapture = false;
+  if (
+    currentAgent === 'booking' &&
+    pendingSlots?.length > 0 &&
+    !patient?.patientId &&
+    action !== 'book_appointment'
+  ) {
+    const prevSpeak    = lastAssistantSpeak(history) || '';
+    const askedForName = /nome completo|o seu nome|qual\s+[ée]\s+o\s+seu\s+nome|your (full )?name|full name|the name/i.test(prevSpeak);
+    const name         = askedForName ? extractNewPatientName(userText) : null;
+    if (name) {
+      const latestPeriod = inferLatestExplicitPeriodFromUser(history, params);
+      const inferredPeriod = latestPeriod?.period || params.chosenPeriod || null;
+      console.log(`[Guard] NEW-PATIENT name captured ("${name}") → book_appointment now. inferredPeriod: ${inferredPeriod || '(unknown)'}`);
+      action = 'book_appointment';
+      params = { ...params, patientName: name, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText };
+      if (inferredPeriod) params.chosenPeriod = inferredPeriod;
+      parsed.action = action;
+      parsed.params = params;
+      bookViaNameCapture = true;
+    }
+  }
+
   // ── HARD GUARD: loop detection → transfer to human after 3 repeats ──────────
   // If Vicki repeats the exact same message 3+ times, she's stuck and can't
   // understand the patient. Transfer the call instead of looping forever.
@@ -2920,6 +2978,7 @@ async function processTurn({
   // dizer-me o seu nome completo?") then CREATES the file before booking. No name
   // → no booking → never a false confirmation.
   if (
+    !bookViaNameCapture &&   // name-capture already decided to book — don't re-confirm
     (currentAgent === 'booking' || currentAgent === 'info' || currentAgent === 'family') &&
     pendingSlots?.length > 0 &&
     (patient?.patientId || currentAgent === 'booking') &&
