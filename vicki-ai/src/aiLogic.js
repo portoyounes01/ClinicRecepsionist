@@ -1928,6 +1928,14 @@ function isCloseDecline(userText) {
 // straight from the pending slot(s) — deterministic so the caller always hears
 // a clear time/date/doctor (callers often can't hear it the first time). The
 // pending slots can still be confirmed afterwards (we don't clear them).
+// Price detection + the approved free-evaluation answer, shared between the
+// router-level pricing reply and the in-booking price guard so they can't drift.
+// The answer states NO amounts (anti-hallucination); callers append their own
+// follow-up question (router: "book that evaluation?"; booking: re-offer the slot).
+const PRICING_RE = /\b(price|cost|charge|quote|how much|quanto custa|preco|custo|orcamento|honorarios|valor|valores|fees?)\b/;
+const PRICE_ANSWER_PT = 'Os nossos médicos começam sempre com uma consulta de avaliação gratuita: analisam o seu caso e entregam um plano com os valores antes de qualquer decisão.';
+const PRICE_ANSWER_EN = 'Our doctors always start with a free evaluation consultation: they assess your case and give you a plan with the costs before any decision.';
+
 function appointmentDetailAnswer(userText, pendingSlots = [], lang = 'pt') {
   if (!pendingSlots || !pendingSlots.length) return null;
   const text = normalizeForIntent(userText);
@@ -2089,7 +2097,17 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
   // warmly, wishes them well, and tells them to stay on the line. This is a
   // deterministic hard rule (not left to the LLM) and fires from ANY agent.
   const emergency = /\b(pain|hurts?|hurting|aching|ache|severe|terrible|unbearable|emergency|urgent\w*|urgency|toothache|abscess|swelling|swollen|bleeding|knocked out|broke|broken tooth|dor|dores|doi|doer|a doer|magoa|magoado|severa|forte|emergencia|acidente|urgente|urgencia|dor forte|muita dor|inchaco|inchada|sangramento|sangra|abcesso|abscesso|dente partido|parti um dente|parti o dente)\b/.test(text);
-  if (emergency) {
+  // CONSERVATIVE DOWNGRADE: clearly NEGATED or PAST/RESOLVED pain ("já não dói",
+  // "não tenho dores", "a dor já passou") should NOT trip the emergency transfer —
+  // but ONLY when there's no active structural emergency (accident / bleeding /
+  // swelling / broken tooth / abscess). Any ambiguity → still emergency.
+  const painResolved =
+    /\b(ja\s+)?nao\s+(tenho\s+|sinto\s+|me\s+|estou\s+com\s+)?(dor|dores|doi|doe|doendo)\b/.test(text) ||
+    /\bsem\s+(dor|dores)\b/.test(text) ||
+    /\b(dor|dores|doi|doia)\b[\s\S]{0,25}\b(ja\s+passou|passou|parou|melhorou|desapareceu|foi[\s-]?embora)\b/.test(text) ||
+    /\b(ja\s+passou|deixou de doer|no longer hurts?|doesn'?t hurt anymore|pain (is )?gone)\b/.test(text);
+  const hardEmergency = /\b(acidente|accident|sangramento|sangra|abcesso|abscesso|abscess|dente partido|parti um dente|parti o dente|knocked out|broke|broken tooth|inchaco|inchada|swelling|swollen|bleeding)\b/.test(text);
+  if (emergency && !(painResolved && !hardEmergency)) {
     return {
       speak: speakIn(
         languageState,
@@ -2244,13 +2262,13 @@ function deterministicTransferOverride(currentAgent, userText, languageState, pa
   // no dead air). Approved wording: free evaluation consultation, no amounts.
   // We do NOT trigger on an in-progress booking (a price aside mid-booking is
   // rare and the booking flow handles its own context).
-  const pricing = /\b(price|cost|charge|quote|how much|quanto custa|preco|custo|orcamento|honorarios|valor|valores|fees?)\b/.test(text);
+  const pricing = PRICING_RE.test(text);
   if (pricing && currentAgent !== 'emergency') {
     return {
       speak: speakIn(
         languageState,
-        'Os nossos médicos começam sempre com uma consulta de avaliação gratuita: analisam o seu caso e entregam um plano com os valores antes de qualquer decisão. Quer que marque essa avaliação?',
-        'Our doctors always start with a free evaluation consultation: they assess your case and give you a plan with the costs before any decision. Would you like me to book that evaluation?'
+        `${PRICE_ANSWER_PT} Quer que marque essa avaliação?`,
+        `${PRICE_ANSWER_EN} Would you like me to book that evaluation?`
       ),
       action: 'none',
       currentAgent: 'info',
@@ -2541,15 +2559,21 @@ async function processTurn({
       if (!s) continue;
       if (hadUser || s !== lastSpeak) { sawUserBetween.push(s); lastSpeak = s; hadUser = false; }
     }
-    const lastTwoSame = sawUserBetween.length >= 2 &&
-      sawUserBetween[sawUserBetween.length - 1] === sawUserBetween[sawUserBetween.length - 2];
-    if ((lastTwoSame || unclearTurns >= 3) && currentAgent !== 'emergency') {
+    // Require THREE identical Vicki turns (not two) before treating it as a loop,
+    // and rely on the router's `unclearTurns >= 5` escalation (below) as the single
+    // source for "too many unclear turns" — so a couple of natural re-asks don't
+    // transfer. (Consistent with the hard-repeat guard, which also needs 3 total.)
+    const n = sawUserBetween.length;
+    const lastThreeSame = n >= 3 &&
+      sawUserBetween[n - 1] === sawUserBetween[n - 2] &&
+      sawUserBetween[n - 2] === sawUserBetween[n - 3];
+    if (lastThreeSame && currentAgent !== 'emergency') {
       const tSpeak = nextLanguageState === 'en'
         ? "I'm sorry — I'm having trouble understanding over the line. One moment, I'll pass you to a colleague who can help."
         : 'Peço desculpa — estou com dificuldade em perceber pela linha. Aguarde um momento, vou passar a um colega que poderá ajudar.';
       const parsed = { speak: tSpeak, action: 'transfer_to_human', intent: 'human', params: {} };
       history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-      console.log(`[Guard] STUCK LOOP (lastTwoSame=${lastTwoSame}, unclearTurns=${unclearTurns}) → transfer_to_human`);
+      console.log(`[Guard] STUCK LOOP (lastThreeSame) → transfer_to_human`);
       return finalize({ speak: tSpeak, action: 'transfer_to_human', history, currentAgent: 'human', unclearTurns: 0, bookingReasonText });
     }
   }
@@ -2580,6 +2604,45 @@ async function processTurn({
     const parsed = { speak: apptDetail, action: 'none', intent: 'booking', params: {} };
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
     return finalize({ speak: apptDetail, action: 'none', history, currentAgent: 'booking', unclearTurns: 0, bookingReasonText });
+  }
+
+  // ── MID-BOOKING QUESTION → answer in place + re-offer the slot (stay in booking) ──
+  // A patient with a pending slot who asks a price / hours / location aside must NOT
+  // lose the booking (previously routed booking→info→human and abandoned it). Answer
+  // from the existing helpers and re-offer the SAME slot so a "sim" still books.
+  // The appointment-time question ("a que horas?") is owned by appointmentDetailAnswer
+  // above and already returned, so this only runs for genuine clinic-info/price asides.
+  if (currentAgent === 'booking' && pendingSlots?.length > 0) {
+    const asideText = normalizeForIntent(userText);
+    // Narrow detectors only — price OR clinic hours/address. Anything else (e.g.
+    // the patient choosing a slot or giving their name) is NOT an aside and must
+    // fall through to the normal booking flow.
+    const asksHoursOrAddress = /\b(horario|horarios|que horas (abre|abrem|fecha|fecham)|abre|abrem|aberto|aberta|fecha|fecham|fechad[oa]|feriado|feriados|sabado|domingo|fim de semana|opening hours|what time.*(open|close)|are you (open|closed)|weekends?|morada|localizacao|onde fica|onde ficam|address|location|where are you|where is the clinic)\b/.test(asideText);
+    let asideAnswer = null;
+    if (PRICING_RE.test(asideText)) {
+      asideAnswer = speakIn(nextLanguageState, PRICE_ANSWER_PT, PRICE_ANSWER_EN);
+    } else if (asksHoursOrAddress) {
+      // Pass NO slots so clinicInfoAnswer answers the hours/address FAQ instead of skipping.
+      asideAnswer = clinicInfoAnswer(userText, nextLanguageState, clinicInfo, []);
+    }
+    if (asideAnswer) {
+      // Re-offer WITHOUT guessing a slot: name it only if there's exactly one;
+      // otherwise re-list the offered options and ask which (never assume a time).
+      const en = nextLanguageState === 'en';
+      const fmtSlot = s => en
+        ? `${s.displayDate} at ${s.displayTime} with ${s.medicName}`
+        : `${s.displayDate} às ${s.displayTime} da ${s.period} com ${s.medicName}`;
+      const reoffer = pendingSlots.length === 1
+        ? bookingConfirmPrompt(pendingSlots, userText, nextLanguageState)
+        : (en
+            ? `I have ${pendingSlots.slice(0, 2).map(fmtSlot).join(', or ')}. Which would you prefer?`
+            : `Tenho ${pendingSlots.slice(0, 2).map(fmtSlot).join(', ou ')}. Qual prefere?`);
+      const speak = `${asideAnswer} ${reoffer}`;
+      const parsed = { speak, action: 'none', intent: 'booking', params: {} };
+      history.push({ role: 'assistant', content: JSON.stringify(parsed) });
+      console.log('[Guard] mid-booking aside answered in place; re-offering slot(s) (no detour).');
+      return finalize({ speak, action: 'none', history, currentAgent: 'booking', unclearTurns: 0, bookingReasonText });
+    }
   }
 
   const directClinicInfo = clinicInfoAnswer(userText, nextLanguageState, clinicInfo, pendingSlots);
@@ -3325,6 +3388,34 @@ async function processTurn({
 
   // ── 2. TRANSFER ACTIONS ───────────────────────────────────
   if (action === 'transfer_to_human') {
+    // RESUME-OVER-ESCALATE (defense-in-depth): if we're mid-booking (a detour saved
+    // returnToAgent='booking' with pending slots) and this transfer is NOT a genuine
+    // human-need — insurance / complaint / billing / explicit human request / pain —
+    // resume the booking instead of abandoning it. Default stays escalate; this only
+    // fires for a "mere question" detour (price/FAQ is already handled in booking, so
+    // this is a backstop for any other detour that would otherwise drop the booking).
+    const humanNeed = /\b(real person|human|reception|receptionist|manager|complaint|billing|bill|overcharged|charged incorrectly|insurance|health plan|falar com alguem|pessoa real|rececao|gerente|reclamacao|faturacao|fatura|cobraram|seguro|subsistema|plano de saude|pain|hurts?|toothache|swelling|bleeding|broken tooth|dor|dores|doi|inchaco|inchada|sangr|abcesso|abscesso|dente partido)\b/.test(normalizeForIntent(userText));
+    if (returnToAgent === 'booking' && returnContext?.pendingSlots?.length && !humanNeed) {
+      const slotSummary = returnContext.pendingSlots
+        .map(s => `${s.displayDate || s.date} às ${s.displayTime || s.time} com ${s.medicName}`).join(', ');
+      history.push({ role: 'system', content:
+        `[RETOMA DA MARCAÇÃO] O paciente estava a marcar uma consulta. Slots já oferecidos: ${slotSummary}. ` +
+        `Motivo: ${returnContext.bookingReasonText || 'não especificado'}. ` +
+        `Retoma naturalmente sem mencionar a transferência — pergunta qual slot prefere.` });
+      console.log('[Guard] mere-question detour → resume booking instead of human transfer.');
+      return finalize({
+        speak: '',
+        action: 'none',
+        history,
+        currentAgent: 'booking',
+        pendingSlots: returnContext.pendingSlots,
+        bookingReasonText: returnContext.bookingReasonText || updatedBookingReasonText,
+        lastOfferedDate: returnContext.lastOfferedDate ?? lastOfferedDate,
+        returnToAgent: null,
+        returnContext: {},
+        autoSpeak: true,
+      });
+    }
     const tSpeak = transferSpeak(patient, nextLanguageState);
     history.push({ role: 'assistant', content: JSON.stringify({ ...parsed, speak: tSpeak }) });
     return finalize({

@@ -584,7 +584,8 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
   let endpointGraceTimer  = null;   // pending grace wait when a phrase sounds unfinished
   let consecutiveReprompts = 0;     // back-to-back low-confidence "didn't catch that" count
                                     // — breaks the "What?/Sorry?" feedback loop
-  let totalReprompts      = 0;      // TOTAL "didn't catch that" this call — does NOT reset.
+  let totalReprompts      = 0;      // TOTAL "didn't catch that" this call — DECAYS by 1 on each
+                                    // understood turn (so only SUSTAINED trouble escalates).
                                     // consecutiveReprompts resets whenever a real turn fires,
                                     // so a caller alternating clear+unclear could loop forever
                                     // (RICARDO #38). This hard cap escalates regardless.
@@ -965,7 +966,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
         // latter catches the forever-loop where consecutiveReprompts kept resetting
         // because clear turns fired in between — RICARDO #38). DON'T go silent
         // (that stranded him); transfer to a human — STT can't hear them, a person can.
-        if (consecutiveReprompts >= 2 || totalReprompts >= 3) {
+        if (consecutiveReprompts >= 2 || totalReprompts >= 4) {
           console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — consec=${consecutiveReprompts} total=${totalReprompts} → transferring to human: "${candidate}"`);
           const handoff = languageState === 'en'
             ? "I'm sorry, the line isn't clear and I'm having trouble hearing you. One moment, I'll pass you to a colleague."
@@ -988,7 +989,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           return;
         }
         consecutiveReprompts++;
-        totalReprompts++; // never reset — hard ceiling against the resetting-counter loop
+        totalReprompts++; // decays on understood turns; ceiling (>=4) still catches a sustained bad line
         console.log(`[STT] Low confidence (${confidence.toFixed(2)}) — asking caller to repeat (consec #${consecutiveReprompts}, total ${totalReprompts}): "${candidate}"`);
         isSpeaking = true;
         const repromptLine = languageState === 'en' ? 'Sorry, I didn\'t quite catch that. Could you repeat, please?' : 'Desculpe, não percebi bem. Pode repetir, por favor?';
@@ -1026,6 +1027,7 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
           if (!finalText) return;
           console.log(`[STT] Grace elapsed → AI Processing: "${finalText}"`);
           consecutiveReprompts = 0; // understood a real turn — reset the reprompt streak
+          totalReprompts = Math.max(0, totalReprompts - 1); // decay: a clear turn pays down the total so one noisy patch can't doom the call
           runTurn(finalText).catch(e => console.error('[Turn] runTurn failed:', e?.stack || e));
         }, graceMs);
         return;
