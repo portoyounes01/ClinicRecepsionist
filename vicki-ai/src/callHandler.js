@@ -655,12 +655,17 @@ async function handleCallStream(ws, req, hangupCalls = new Set(), transferCalls 
       // trust the threaded appointmentId, not summary.outcome.
       const claimedBooked = summary.outcome === 'booked';
       const realBooked    = !!lastAppointmentId;
-      const outcomeEmoji = claimedBooked
-        ? (realBooked ? '✅' : '⚠️')
-        : ({ cancelled: '❌', transferred: '👤', info: 'ℹ️', abandoned: '📭' }[summary.outcome] || '📞');
+      // GREEN = Vicki resolved it herself without transferring (a success): a real
+      // booking, an answered question (info_given), or a confirmation.
+      let outcomeEmoji;
+      if (claimedBooked) outcomeEmoji = realBooked ? '✅' : '🚨';
+      else if (summary.outcome === 'info_given' || summary.outcome === 'confirmed') outcomeEmoji = '✅';
+      else outcomeEmoji = ({ cancelled: '❌', transferred: '👤', abandoned: '📭', no_action: '📭' }[summary.outcome] || '📞');
       const headline = (claimedBooked && !realBooked)
         ? 'marcação reportada mas NÃO confirmada no Newsoft'
-        : (summary.outcome || 'concluída');
+        : summary.outcome === 'info_given'
+          ? 'resolvida pela Vicki — informação dada, sem transferência'
+          : (summary.outcome || 'concluída');
       const bookingLine = claimedBooked
         ? (realBooked
             ? `🆔 Marcação: ${esc(lastAppointmentId)}${lastBookingVerifiedAt ? ' (verificada no Newsoft)' : ' (a verificar)'}`
