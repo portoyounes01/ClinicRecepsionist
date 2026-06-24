@@ -117,6 +117,7 @@ const SCENARIOS = [
   sc('appointments', 'en', 'Confirm your appointment.', { slug: 'inq_confirm', caller: RET_EN.patientPhoneNumber, fixture: { patient: RET_EN, slotMode: 'plenty', existingAppointments: ONE_APPT }, success: 'Confirms the real appointment details.' }),
   sc('appointments', 'pt', 'Perguntar a que horas e com que médico é a consulta.', { slug: 'inq_horas', caller: RET_PT.patientPhoneNumber, fixture: { patient: RET_PT, slotMode: 'plenty', existingAppointments: ONE_APPT }, success: 'Gives correct time + doctor from records.' }),
   sc('appointments', 'pt', 'Perguntar pela tua consulta, mas não tens nenhuma.', { slug: 'inq_nenhuma', caller: RET_PT2.patientPhoneNumber, fixture: { patient: RET_PT2, slotMode: 'plenty', existingAppointments: [] }, success: 'Honestly says none on file; offers to book.' }),
+  sc('appointments', 'pt', 'Ligas só para confirmar a tua consulta — queres confirmar que está marcada e a que horas é.', { slug: 'inq_confirmar_pt', caller: RET_PT.patientPhoneNumber, fixture: { patient: RET_PT, slotMode: 'plenty', existingAppointments: ONE_APPT }, personality: 'apenas a confirmar', success: 'Verifica e confirma os dados reais da consulta (data/hora/médico); NUNCA pergunta "qual é o motivo da consulta"; NÃO inicia uma nova marcação.' }),
 
   // ── INFO / FAQ (8) ────────────────────────────────────────
   sc('info', 'pt', 'Saber o horário de funcionamento.', { slug: 'faq_horario', success: 'Gives clinic hours without inventing; stays in scope.' }),

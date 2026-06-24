@@ -2312,7 +2312,12 @@ function deterministicRouterDecision(userText, languageState) {
   }
 
   const booking = /\b(book|schedule|appointment|consultation|see a doctor|see the dentist|come in|available this week|available next week|can .* see me|marcar|agendar|consulta|ver um medico|vir esta semana|tem disponibilidade|pode ver-me)\b/.test(text);
-  const existingAppointment = /\b(cancel|reschedule|postpone|change my appointment|move my appointment|push my appointment|have an appointment|my appointment tomorrow|what time .* appointment|forgot what time .* appointment|next appointment|do i have an appointment|confirm my appointment|cancelar|desmarcar|remarcar|mudar a consulta|a que horas e a minha consulta|tenho consulta|tenho alguma consulta|tenho uma consulta|consulta marcada|consulta agendada|saber se tenho|verificar se tenho|ja tenho consulta)\b/.test(text);
+  // NOTE: this runs ONLY at the router stage (currentAgent === 'router'), so a
+  // mid-booking "confirmo" never reaches here — safe to treat "confirmar" as a
+  // request about an EXISTING appointment. Added: confirmar + "what time is my
+  // appointment" phrasings, which previously fell through to booking and made
+  // Vicki wrongly ask "qual é o motivo da consulta?" on a confirm (calls 67/69).
+  const existingAppointment = /\b(cancel|reschedule|postpone|change my appointment|move my appointment|push my appointment|have an appointment|my appointment tomorrow|what time .* appointment|forgot what time .* appointment|next appointment|do i have an appointment|confirm my appointment|confirm the appointment|confirm appointment|confirm that|cancelar|desmarcar|remarcar|confirmar|mudar a consulta|a que horas e a minha consulta|que horas e a (minha )?consulta|que horas (tenho|sera) a consulta|horario da (minha )?consulta|tenho consulta|tenho alguma consulta|tenho uma consulta|consulta marcada|consulta agendada|saber se tenho|verificar se tenho|ja tenho consulta)\b/.test(text);
   if (existingAppointment) {
     return {
       intent: 'appointments',
