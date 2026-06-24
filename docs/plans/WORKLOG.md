@@ -2,6 +2,31 @@
 
 > **Purpose:** running record of what we're doing, decisions made, and findings — so any new chat or agent can read this + [ROADMAP.md](ROADMAP.md) and instantly know the current state. Newest entries at the top.
 
+## 2026-06-24 (latest) — Change-doctor on reschedule + the gym-NOISE lesson
+
+After the same-doctor fix, the change-doctor reschedule looked broken (resched_medico
+0/3). Investigated before "fixing": ran the same scenarios on the PRE-change commit and
+at higher repeat. **Key finding: the doctor edge-cases are wildly non-deterministic — the
+EXACT SAME code scores 0/3 ↔ 3/3 run to run.** The scary "0/3" was gym noise, not a
+regression. dr_quais / rotacao_medico were 0/3 BEFORE the change too (pre-existing).
+
+Conclusion: at n=3 the gym is NOT a reliable regression detector for flaky conversational
+edge-cases — only for the deterministic flows (safety, booking, cancel are consistently
+3/3). Judge flaky cases with high-repeat runs or real calls.
+
+Real, safe fix shipped anyway (the switch detector genuinely missed "trocar/mudar de
+médico" — only matched "outro médico"): broadened it so a patient can SWITCH doctors on
+reschedule. Safe by construction — only fires on explicit switch language, so same-doctor
+reschedule is untouched. Validated at **n=8**: resched_mesmo_medico 6/8 (same doctor holds),
+resched_medico 6/8 (switch works), msg_muda_medico 4/8 (up from 0-1/3), dr_qualquer 6/8.
+
+Gate hardened: +resched_medico +resched_mesmo_medico in CORE, plus **retry-on-zero** — a
+flaky 0 re-runs once before counting as a regression (a TRUE regression scores 0 twice).
+Full gate GREEN. Deployed `bee0fd0`, ● Online.
+
+STILL pre-existing-weak (separate work, NOT regressions): dr_quais (list doctors),
+rotacao_medico, msg_muda_medico (~50%). A/B baseline tooling at scratchpad/suite.sh.
+
 ## 2026-06-24 (later) — Reschedule now KEEPS the same doctor + leads the caller
 
 Call 71: patient rescheduling with Dr. Hermes was offered Silvia, then Nadine —
