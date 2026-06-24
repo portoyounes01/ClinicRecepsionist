@@ -2,6 +2,37 @@
 
 > **Purpose:** running record of what we're doing, decisions made, and findings — so any new chat or agent can read this + [ROADMAP.md](ROADMAP.md) and instantly know the current state. Newest entries at the top.
 
+## 2026-06-24 (later) — Reschedule now KEEPS the same doctor + leads the caller
+
+Call 71: patient rescheduling with Dr. Hermes was offered Silvia, then Nadine —
+Vicki lost the doctor; patient had to insist "com o Dr. Hermes" → confusion.
+
+Root cause (two gaps): (1) the new-slot search wasn't locked to the existing
+doctor — the rotation/unlock at [aiLogic.js check_slots](../../vicki-ai/src/aiLogic.js)
+deliberately spans the specialty and offers OTHER doctors; (2) the same-doctor
+handoff (`rebookContext`) was set only on cancel, consumed at the guard, and its
+trigger phrase ("nova vaga/data") didn't match real reschedule wording ("outro horário").
+
+Fix (all null-safe — keyed on `rebookContext`, null for normal bookings):
+- `resolveMedicIdByName()` — appointments carry only the doctor NAME (Newsoft omits
+  medicId on read-back), so resolve name → id to lock the same doctor.
+- `check_slots`: when a rebook is active, lock that doctor's medicId + treat as a
+  named-doctor request → suppresses the unlock/rotation that surfaced other doctors.
+  Patient can still switch by naming a doctor or saying "outro médico".
+- Persist `rebookContext` through the rebook (was nulled at the guard); also derive
+  it from the existing appointment at the appointments→booking handoff (no-cancel
+  path, call 71); clear on successful booking or explicit doctor change.
+- Broaden the rebook-guard trigger to real reschedule phrasings.
+- Lead the caller: name the doctor + offer 2 concrete slots; DON'T re-ask the motivo
+  on a reschedule (same consulta) — less friction for impatient callers.
+- textGym: thread `rebookContext` (was reset every turn → flow untestable); new
+  scenario `resched_mesmo_medico`.
+
+**Validation:** `resched_mesmo_medico` 4/4, offers ONLY Dr. Hermes, 0 hallucinations,
+log shows `[Rebook] locking same doctor … medicId 11`. Full regression gate GREEN
+(safety all 3/3; cancel + resched_later + confirm 2/2). Deployed `614a2bf`, ● Online,
+clean boot.
+
 ## 2026-06-24 — Regression gate so new edits can't break previous fixes
 
 User: "make a workflow so when you make edits you don't fuck up the previous ones."
