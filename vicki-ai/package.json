@@ -13,7 +13,8 @@
     "test:gym:gate": "node scripts/anti-lie.test.js && node scripts/booking-persist-it.js && node scripts/textGym.js --gate",
     "test:anti-lie": "node scripts/anti-lie.test.js",
     "test:booking-persist": "node scripts/booking-persist-it.js",
-    "test:lifecycle": "node scripts/lifecycle-it.js"
+    "test:lifecycle": "node scripts/lifecycle-it.js",
+    "test:regression": "node scripts/regression.js"
   },
   "dependencies": {
     "@elevenlabs/elevenlabs-js": "^2.49.1",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "nodemon": "^3.1.4",
-    "pg-mem": "^3.0.14"
+    "pg-mem": "^3.0.14",
+    "undici": "^8.5.0"
   }
 }

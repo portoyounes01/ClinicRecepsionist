@@ -25,7 +25,25 @@ The user values speed. Optimize for fewer round-trips and less waiting:
 - **Parallel by default.** Batch independent tool calls in one message; never serialize what can run together.
 - **Background long commands.** Run log pulls, builds, and deploys with `run_in_background` and keep working.
 - **Assume sensibly.** Make reasonable assumptions on small details instead of stopping to ask. Only ask when a choice genuinely changes the outcome.
-- **Commit + push after each source edit** (Railway auto-deploys from main).
+- **Commit + push after each source edit** (Railway auto-deploys from main) — but only AFTER the regression gate below passes.
+
+---
+
+## 🛡️ REGRESSION GATE — DON'T BREAK PREVIOUS FIXES (mandatory)
+
+`pushing to main auto-deploys to the LIVE clinic line.` Each fix has broken earlier ones before, so every change to the booking / conversational flow goes through this gate. NO exceptions for "small" edits.
+
+**The workflow, every time:**
+1. **Branch first** — never edit on `main` directly. `git checkout -b fix/<thing>`.
+2. **Make the change** + add/keep a gym scenario that proves it.
+3. **Run the gate:** `cd vicki-ai && npm run test:regression`. It runs the deterministic tests (anti-lie, booking-persist) + the gym **safety** set (emergency / insurance / human / billing — must be 100%) + **core** flows (booking / cancel / reschedule / confirm / info — a 0% score = regression). It exits non-zero if anything safety-critical fails or a core flow regressed.
+4. **Only if the gate passes (exit 0):** merge to `main`, push (deploys), then **verify the boot** in Railway logs (`VICKI AI — Server Running`, `Engine booted`, no errors).
+5. **If a previously-green flow goes red → do NOT deploy.** Fix it or revert.
+
+**Notes:**
+- The gym needs `OPENAI_API_KEY` in `vicki-ai/.env` and an LTS Node. Local Node 24/26 drops OpenAI SSE streams — the gate auto-loads `scripts/sim/openai-fetch-shim.js` (needs the `undici` devDep) to work around it; production/CI on LTS Node is unaffected.
+- Everything is revertible: a bad deploy → `git revert <sha> && git push` rolls `main` back in seconds.
+- Don't silently widen scope. One fix, one branch, gated, deployed, verified.
 
 ---
 
