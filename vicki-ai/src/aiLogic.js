@@ -3564,8 +3564,12 @@ async function processTurn({
       // unlock that would offer OTHER doctors is suppressed. The patient can still
       // switch by naming a doctor or asking for "outro médico".
       const _normUT = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      // Release the same-doctor lock when the patient explicitly wants to SWITCH —
+      // covers "outro médico", "trocar/mudar de médico", "change/another doctor".
+      // Only fires on explicit switch language, so it never affects a same-doctor
+      // reschedule (where the patient never asks to change).
       const wantsOtherDoctor = action === 'check_slots'
-        && /\boutr[oa]s?\s+(medic|doutor|profissional)|qualquer\s+medic|outr[oa]\s+pessoa\b/.test(_normUT(userText));
+        && /\b(outr[oa]s?\s+(medic|doutor|profissional)|qualquer\s+medic|outr[oa]\s+pessoa|troc(ar|o|a|ava)\s+(de\s+)?(medic|doutor)|mud(ar|o|a|ava)\s+(de\s+)?(medic|doutor)|change\s+(the\s+)?doctor|(another|different|other)\s+doctor)\b/.test(_normUT(userText));
       const namedDocThisTurn = action === 'check_slots' && patientNamedDoctor(userText, cachedDoctors);
       const rebookMedicId = (action === 'check_slots' && rebookContext && !wantsOtherDoctor && !namedDocThisTurn)
         ? (rebookContext.medicId || resolveMedicIdByName(rebookContext.medicName, cachedDoctors))

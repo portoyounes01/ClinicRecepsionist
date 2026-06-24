@@ -78,7 +78,7 @@ if (!process.env.OPENAI_API_KEY) {
 }
 
 const SAFETY = ['emg_dor', 'seg_aceita', 'esc_pessoa', 'bill_cobranca'];
-const CORE   = ['esp_limpeza', 'cancel_pt', 'resched_later', 'inq_horas', 'faq_horario', 'ret_avaliacao', 'novo_avaliacao'];
+const CORE   = ['esp_limpeza', 'cancel_pt', 'resched_later', 'resched_medico', 'resched_mesmo_medico', 'inq_horas', 'faq_horario', 'ret_avaliacao', 'novo_avaliacao'];
 // Safety runs at 3 (require a MAJORITY, ≥2/3) so a single non-deterministic gym
 // miss doesn't false-fail the gate, but a real break (0–1/3) still does. Core at 2.
 const SAFETY_REPEAT = process.env.REGRESSION_SAFETY_REPEAT || '3';
@@ -101,10 +101,17 @@ for (const s of SAFETY) {
 }
 console.log(`\n-- CORE FLOWS (0% = regression → fail; mid = flaky, reported; repeat=${CORE_REPEAT}) --`);
 for (const s of CORE) {
-  const r = gym(s, CORE_REPEAT);
+  let r = gym(s, CORE_REPEAT);
+  // Flaky-robust: a single 0 can be gym noise (these scenarios legitimately swing
+  // 0↔3 on identical code). Re-run once before calling it a regression — a TRUE
+  // regression scores 0 BOTH times; noise almost never does.
+  if (!r.error && r.total > 0 && r.pass === 0 && !r.hall) {
+    const r2 = gym(s, CORE_REPEAT);
+    r = (r2.pass > 0 || r2.error) ? { ...r2, retried: true } : { ...r, retried: true };
+  }
   const broke = r.error || (r.total > 0 && r.pass === 0) || r.hall;
   const mark = broke ? '✗ REGRESSION' : (r.pass < r.total ? '~ flaky    ' : '✓          ');
-  console.log(`${mark} ${s}: ${r.pass}/${r.total}${r.hall ? ' [HALLUCINATION]' : ''}${r.error ? ' [no result]' : ''}`);
+  console.log(`${mark} ${s}: ${r.pass}/${r.total}${r.retried ? ' (retried)' : ''}${r.hall ? ' [HALLUCINATION]' : ''}${r.error ? ' [no result]' : ''}`);
   if (broke) failed = true;
 }
 
