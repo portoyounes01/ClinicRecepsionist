@@ -2,6 +2,37 @@
 
 > **Purpose:** running record of what we're doing, decisions made, and findings — so any new chat or agent can read this + [ROADMAP.md](ROADMAP.md) and instantly know the current state. Newest entries at the top.
 
+## 2026-06-24 — Regression gate so new edits can't break previous fixes
+
+User: "make a workflow so when you make edits you don't fuck up the previous ones."
+Built one command + a mandatory CLAUDE.md rule.
+
+- **`npm run test:regression`** ([vicki-ai/scripts/regression.js](../../vicki-ai/scripts/regression.js)):
+  - Phase 0 — `npm ci --dry-run` deploy-readiness (package.json/lock in sync).
+  - Phase 1 — deterministic: anti-lie (9/9) + booking-persist (no API key).
+  - Phase 2 — gym SAFETY (emg/insurance/human/billing, majority ≥2/3 over 3 runs,
+    no hallucinations) + CORE flows (booking/cancel/reschedule/confirm/info; 0% = regression).
+  - Exits non-zero on lock drift, any safety miss, or a core regression. `REGRESSION_SKIP_GYM=1`
+    runs only the fast 0+1 checks. Safety bar is majority (not strict 100%) so gym
+    flakiness doesn't false-fail.
+- **Bundled fetch shim** ([scripts/sim/openai-fetch-shim.js](../../vicki-ai/scripts/sim/openai-fetch-shim.js)):
+  best-effort `undici.fetch` injection so the gym runs on local Node 24/26 (built-in
+  fetch drops OpenAI SSE); no-op on LTS/CI. Added `undici` devDep.
+- **CLAUDE.md rule** (🛡️ REGRESSION GATE): branch → change → gate green → deploy →
+  verify boot → revert if a green flow goes red.
+
+**Baseline scorecard (deployed `main`):** core flows + ALL safety paths green;
+soft spots are pre-existing (new-patient booking ~50% flaky) or gym artifacts
+(confirm dry-run can't reach NewSoft) — NOT regressions from recent edits.
+
+**Self-inflicted lesson:** first deploy of this tooling FAILED — added `undici` to
+package.json but installed it with `--no-save`, so the lock was out of sync and
+Railway's `npm ci` aborted. Live line stayed on the prior good build (no outage);
+fixed by `npm install --package-lock-only` + commit (9986e7e). Then added the Phase 0
+`npm ci` check so the gate catches this class of failure itself (c271946).
+
+Commits: 1cacd25 (gate), 9986e7e (lock fix), c271946 (Phase 0 hardening).
+
 ## 2026-06-17 (later) — RICARDO #38 forever-loop: STT reprompt had NO working escape
 
 Caller kept saying "confirmar a consulta de amanhã"; Vicki repeated the EXACT same
