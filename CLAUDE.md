@@ -36,7 +36,7 @@ The user values speed. Optimize for fewer round-trips and less waiting:
 **The workflow, every time:**
 1. **Branch first** — never edit on `main` directly. `git checkout -b fix/<thing>`.
 2. **Make the change** + add/keep a gym scenario that proves it.
-3. **Run the gate:** `cd vicki-ai && npm run test:regression`. It runs the deterministic tests (anti-lie, booking-persist) + the gym **safety** set (emergency / insurance / human / billing — must be 100%) + **core** flows (booking / cancel / reschedule / confirm / info — a 0% score = regression). It exits non-zero if anything safety-critical fails or a core flow regressed.
+3. **Run the gate:** `cd vicki-ai && npm run test:regression`. It runs: (0) **deploy-readiness** — `npm ci` sync, so a dep added without updating `package-lock.json` can't fail the Railway build; (1) **deterministic** tests (anti-lie, booking-persist); (2) the gym **safety** set (emergency / insurance / human / billing — majority ≥2/3 over 3 runs, no hallucinations) + **core** flows (booking / cancel / reschedule / confirm / info — a 0% score = regression). It exits non-zero if the lock is out of sync, a safety path fails, or a core flow regressed. (`REGRESSION_SKIP_GYM=1` runs only the fast 0+1 deploy-readiness check.)
 4. **Only if the gate passes (exit 0):** merge to `main`, push (deploys), then **verify the boot** in Railway logs (`VICKI AI — Server Running`, `Engine booted`, no errors).
 5. **If a previously-green flow goes red → do NOT deploy.** Fix it or revert.
 

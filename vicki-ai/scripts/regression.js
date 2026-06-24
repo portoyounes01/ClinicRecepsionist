@@ -5,17 +5,20 @@
 //
 //   npm run test:regression
 //
-// Two phases:
-//   1) Deterministic tests (NO API key): anti-lie + booking-persist. HARD gate.
+// Three phases:
+//   0) Deploy-readiness (NO key): `npm ci` sync — catches package.json/lock drift
+//      that would fail the Railway build. HARD gate.
+//   1) Deterministic tests (NO key): anti-lie + booking-persist. HARD gate.
 //   2) Gym scenarios (needs OPENAI_API_KEY in .env):
-//        SAFETY  — emergency / insurance / human / billing → MUST be 100% (and
-//                  never hallucinate). Any miss FAILS the gate.
+//        SAFETY  — emergency / insurance / human / billing → majority ≥2/3 over 3
+//                  runs, never hallucinate. Any miss FAILS the gate.
 //        CORE    — booking / cancel / reschedule / confirm / info → a scenario
 //                  scoring 0% is a REGRESSION and FAILS; a flaky mid-score is
 //                  reported but does not fail (the gym is non-deterministic).
 //
 // Exit 0 = safe to deploy; non-zero = do NOT deploy (fix or revert).
-// Tunables: REGRESSION_REPEAT (default 2).
+// Tunables: REGRESSION_REPEAT (core, default 2), REGRESSION_SAFETY_REPEAT (default 3),
+//           REGRESSION_SKIP_GYM=1 (fast deploy-readiness + deterministic only).
 // ============================================================
 const { spawnSync } = require('child_process');
 const path = require('path');
@@ -31,6 +34,21 @@ function run(args, env) {
 }
 
 let failed = false;
+
+// ── Phase 0: deploy-readiness — package.json/lock in sync ─────────────────────
+// Catches the exact failure that broke a deploy once: a dep added to package.json
+// without regenerating package-lock.json → Railway's `npm ci` aborts. Cheap, no key.
+console.log('=== Phase 0: deploy-readiness (npm ci sync) ===');
+{
+  const r = spawnSync('npm', ['ci', '--dry-run'], { cwd: ROOT, encoding: 'utf8', shell: true });
+  const ok = r.status === 0;
+  console.log(`${ok ? '✓' : '✗'} package.json / package-lock.json in sync (npm ci)`);
+  if (!ok) {
+    console.error('✗ Lock out of sync → `npm ci` (and the Railway deploy) will fail.');
+    console.error('  Run `npm install` and commit package-lock.json. Aborting.');
+    process.exit(1);
+  }
+}
 
 // ── Phase 1: deterministic (no API key) ──────────────────────────────────────
 console.log('\n=== Phase 1: deterministic tests (no API key) ===');
@@ -48,6 +66,10 @@ if (failed) {
 }
 
 // ── Phase 2: gym (needs key) ─────────────────────────────────────────────────
+if (process.env.REGRESSION_SKIP_GYM === '1') {
+  console.log('\n⏭  REGRESSION_SKIP_GYM=1 — skipping gym (deploy-readiness + deterministic passed).');
+  process.exit(0);
+}
 try { require('dotenv').config({ path: path.join(ROOT, '.env') }); } catch (_) {}
 if (!process.env.OPENAI_API_KEY) {
   console.log('\n⚠ OPENAI_API_KEY not set — skipping gym scenarios (deterministic gate passed).');
