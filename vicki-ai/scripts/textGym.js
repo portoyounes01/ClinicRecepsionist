@@ -65,6 +65,7 @@ async function runWorker() {
     if (r.pendingAppts !== undefined) st.pendingAppts = r.pendingAppts;
     if (r.lastOfferedDate !== undefined) st.lastOfferedDate = r.lastOfferedDate;
     if (r.bookingReasonText !== undefined) st.bookingReasonText = r.bookingReasonText;
+    if (r.rebookContext !== undefined) st.rebookContext = r.rebookContext;
     if (r.returnToAgent) { st.returnToAgent = r.returnToAgent; st.returnContext = r.returnContext || {}; }
     if (r.clearReturn) { st.returnToAgent = null; st.returnContext = {}; }
     if (r.patient?.patientId) st.patient = r.patient;
@@ -76,9 +77,9 @@ async function runWorker() {
     const patient = await provider.getPatientByPhone(scenario.callerNumber);
     const cachedDoctors = await provider.getDoctors();
     const cachedMotives = await provider.getMotives();
-    const st = { history: [], currentAgent: 'router', unclearTurns: 0, pendingSlots: [], pendingAppts: [], lastOfferedDate: null, bookingReasonText: null, returnToAgent: null, returnContext: {}, languageState: 'unknown', patient: patient || null };
+    const st = { history: [], currentAgent: 'router', unclearTurns: 0, pendingSlots: [], pendingAppts: [], lastOfferedDate: null, bookingReasonText: null, rebookContext: null, returnToAgent: null, returnContext: {}, languageState: 'unknown', patient: patient || null };
     const transcript = [];
-    const brain = (userText) => processTurn({ history: st.history, patient: st.patient, clinicInfo: CLINIC_INFO, userText, cachedDoctors, cachedMotives, currentAgent: st.currentAgent, unclearTurns: st.unclearTurns, onSpeakReady: null, pendingSlots: st.pendingSlots, pendingAppts: st.pendingAppts, patientMemory: null, lastOfferedDate: st.lastOfferedDate, bookingReasonText: st.bookingReasonText, callerNumber: scenario.callerNumber, returnToAgent: st.returnToAgent, returnContext: st.returnContext, languageState: st.languageState });
+    const brain = (userText) => processTurn({ history: st.history, patient: st.patient, clinicInfo: CLINIC_INFO, userText, cachedDoctors, cachedMotives, currentAgent: st.currentAgent, unclearTurns: st.unclearTurns, onSpeakReady: null, pendingSlots: st.pendingSlots, pendingAppts: st.pendingAppts, patientMemory: null, lastOfferedDate: st.lastOfferedDate, bookingReasonText: st.bookingReasonText, rebookContext: st.rebookContext, callerNumber: scenario.callerNumber, returnToAgent: st.returnToAgent, returnContext: st.returnContext, languageState: st.languageState });
 
     for (let t = 0; t < MAX_TURNS; t++) {
       const { text, done } = await persona.nextPatientUtterance(scenario.persona, transcript);

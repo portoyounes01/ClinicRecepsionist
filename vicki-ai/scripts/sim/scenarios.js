@@ -17,6 +17,7 @@ const RET_EN  = { patientId: 80002, patientName: 'John Carter',     patientPhone
 const APPT = (id, doctor, dateBegin) => ({ appointmentId: id, medicShortName: doctor, medicName: doctor, appointmentDateBegin: dateBegin });
 const ONE_APPT  = [APPT('EXIST_1', 'Drª Carla Vilas Boas', '2026-06-18T14:00:00')];
 const TWO_APPTS = [APPT('EXIST_1', 'Drª Carla Vilas Boas', '2026-06-18T14:00:00'), APPT('EXIST_2', 'Dr. Hermes', '2026-06-25T10:30:00')];
+const HERMES_APPT = [APPT('EXIST_H', 'Dr. Hermes', '2026-06-26T10:30:00')];
 
 let _n = 0;
 const id = (s) => `${String(++_n).padStart(3, '0')}_${s}`;
@@ -103,6 +104,7 @@ const SCENARIOS = [
   sc('appointments', 'pt', 'Queres remarcar mas não tens nenhuma consulta marcada.', { slug: 'resched_none', caller: RET_PT2.patientPhoneNumber, fixture: { patient: RET_PT2, slotMode: 'plenty', existingAppointments: [] }, success: 'Honestly says no appointment on file; offers to book; no invention.' }),
   sc('appointments', 'pt', 'Remarcar "para a próxima sexta".', { slug: 'resched_sexta', caller: RET_PT.patientPhoneNumber, fixture: { patient: RET_PT, slotMode: 'plenty', existingAppointments: ONE_APPT }, success: 'Reschedules to a real Friday slot; confirms.' }),
   sc('appointments', 'pt', 'Remarcar e trocar de médico.', { slug: 'resched_medico', caller: RET_PT.patientPhoneNumber, fixture: { patient: RET_PT, slotMode: 'plenty', existingAppointments: ONE_APPT }, success: 'Handles reschedule + valid doctor change; confirms.' }),
+  sc('appointments', 'pt', 'Remarcar a tua consulta para outro horário. NÃO digas o nome do médico — assumes que continua com o mesmo de sempre.', { slug: 'resched_mesmo_medico', caller: RET_PT.patientPhoneNumber, fixture: { patient: RET_PT, slotMode: 'plenty', existingAppointments: HERMES_APPT }, personality: 'prática, com pressa', success: 'Remarca MANTENDO o mesmo médico da consulta existente (Dr. Hermes): os horários oferecidos são do Dr. Hermes. NÃO oferece nem troca para outro médico (ex.: Carla, Nadine) sem o paciente pedir. Não inventa dados.' }),
 
   // ── CANCEL (5) ────────────────────────────────────────────
   sc('appointments', 'en', 'Cancel your upcoming appointment.', { slug: 'cancel_en', caller: RET_EN.patientPhoneNumber, fixture: { patient: RET_EN, slotMode: 'plenty', existingAppointments: ONE_APPT }, success: 'Backend cancel fires; Vicki confirms cancellation.' }),

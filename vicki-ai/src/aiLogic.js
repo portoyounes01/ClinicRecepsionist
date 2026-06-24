@@ -326,6 +326,22 @@ function patientNamedDoctor(userText, cachedDoctors) {
   });
 }
 
+// Resolve a doctor NAME (e.g. "Dr. Hermes", taken from an existing appointment)
+// to a medicId, so a reschedule can lock the SAME doctor's availability. Newsoft
+// omits medicId on the appointment read-back — only the name is known — so this
+// bridges name → id. Mirrors patientNamedDoctor's normalize + token match.
+function resolveMedicIdByName(name, cachedDoctors) {
+  if (!name || !Array.isArray(cachedDoctors)) return null;
+  const norm = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const tokens = norm(name).split(/\s+/).filter(p => p.length >= 4 && !/^dr/.test(p));
+  if (!tokens.length) return null;
+  const hit = cachedDoctors.find(d => {
+    const dn = norm(d.medicShortName || d.medicName);
+    return tokens.some(tok => dn.includes(tok));
+  });
+  return hit ? (hit.medicId ?? null) : null;
+}
+
 function explicitBeforeDateTo(userText, referenceDate) {
   const text = (userText || '').toLowerCase();
   if (!/\bbefore\b/.test(text)) return null;
@@ -2674,7 +2690,7 @@ async function processTurn({
   // the handoff to booking instead of trusting the model.
   if (currentAgent === 'appointments' && isAffirmationOnly(userText)) {
     const prev = (lastAssistantSpeak(history) || '').toLowerCase();
-    const offeredRebook = /\b(nova data|nova vaga|outra vaga|encontre uma|find (a )?(new|another)|new time|new date)\b/.test(prev);
+    const offeredRebook = /\b(nova data|nova vaga|outra vaga|encontre uma|outro hor[aá]rio|outra hora|nova hora|reagend|remarc|find (a )?(new|another)|new time|new date)\b/.test(prev);
     if (offeredRebook) {
       const parsed = { speak: '', action: 'transfer_to_booking', intent: 'booking', params: {} };
       history.push({ role: 'assistant', content: JSON.stringify(parsed) });
@@ -2683,10 +2699,11 @@ async function processTurn({
       const sameDoctor = rebookContext?.medicName;
       const medicIdLine = rebookContext?.medicId ? ` (medicId ${rebookContext.medicId})` : '';
       const rebookInstruction = sameDoctor
-        ? `[INSTRUÇÃO INTERNA] O paciente acabou de CANCELAR uma consulta e quer remarcar. ` +
-          `Mantém o MESMO médico: ${sameDoctor}${medicIdLine}. ` +
-          `Pergunta primeiro o motivo da nova consulta; depois chama check_slots com esse médico. Abre naturalmente, uma pergunta por turno.`
-        : `[INSTRUÇÃO INTERNA] O paciente acabou de CANCELAR e quer remarcar. ` +
+        ? `[INSTRUÇÃO INTERNA] O paciente quer REMARCAR / encontrar novo horário para a MESMA consulta. ` +
+          `Mantém SEMPRE o MESMO médico: ${sameDoctor}${medicIdLine}. NÃO voltes a perguntar o motivo — é a mesma consulta. ` +
+          `Chama JÁ check_slots com esse médico e oferece 2 horários concretos, dizendo o nome do médico. ` +
+          `Uma pergunta por turno. Só ofereces outro médico se o paciente pedir explicitamente.`
+        : `[INSTRUÇÃO INTERNA] O paciente quer remarcar. ` +
           `Pergunta o motivo da nova consulta e segue o fluxo normal de marcação. Abre naturalmente.`;
       history.push({ role: 'system', content: rebookInstruction });
       console.log(`[Guard] Rebook accepted after cancel → transfer_to_booking (sameDoctor=${sameDoctor || 'none'})`);
@@ -2697,7 +2714,7 @@ async function processTurn({
         currentAgent: 'booking',
         unclearTurns: 0,
         bookingReasonText,
-        rebookContext: null, // consumed
+        rebookContext, // KEEP it: check_slots locks the same doctor for the whole rebook
         autoSpeak: true, // fire the booking agent immediately, don't wait for the patient
       });
     }
@@ -3506,6 +3523,15 @@ async function processTurn({
       returnToAgent:    clearReturn ? null : newReturnToAgent,
       returnContext:    clearReturn ? {}   : newReturnContext,
       clearReturn,
+      // RESCHEDULE: when leaving the appointments agent to (re)book, lock the
+      // patient's EXISTING doctor so the new-slot search stays with them instead
+      // of rotating to other doctors (call 71). Honours an already-set rebookContext
+      // (cancel path); otherwise derives it from the existing appointment.
+      rebookContext: (currentAgent === 'appointments' && targetAgent === 'booking')
+        ? (rebookContext || (Array.isArray(pendingAppts) && pendingAppts[0]
+            ? { medicId: pendingAppts[0].medicId || null, medicName: pendingAppts[0].medicName || pendingAppts[0].doctor || null }
+            : null))
+        : rebookContext,
       autoSpeak: true,   // ← tells callHandler to immediately fire the new agent without waiting for patient
     };
   }
@@ -3532,6 +3558,20 @@ async function processTurn({
             _familyRelation:  famCtxForBook.relation || null,
           }
         : {};
+      // RESCHEDULE same-doctor lock: when a rebook is in progress, search the
+      // SAME doctor's slots (resolve their name → id, since appointments carry
+      // only the name) and treat it like a named-doctor request so the rotation /
+      // unlock that would offer OTHER doctors is suppressed. The patient can still
+      // switch by naming a doctor or asking for "outro médico".
+      const _normUT = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const wantsOtherDoctor = action === 'check_slots'
+        && /\boutr[oa]s?\s+(medic|doutor|profissional)|qualquer\s+medic|outr[oa]\s+pessoa\b/.test(_normUT(userText));
+      const namedDocThisTurn = action === 'check_slots' && patientNamedDoctor(userText, cachedDoctors);
+      const rebookMedicId = (action === 'check_slots' && rebookContext && !wantsOtherDoctor && !namedDocThisTurn)
+        ? (rebookContext.medicId || resolveMedicIdByName(rebookContext.medicName, cachedDoctors))
+        : null;
+      if (rebookMedicId) console.log(`[Rebook] locking same doctor for reschedule: medicId ${rebookMedicId} (${rebookContext.medicName || '?'})`);
+
       const enrichedParams = action === 'book_appointment'
         ? { ...params, ...familyBookParams, _pendingSlots: pendingSlots, _bookingReasonText: updatedBookingReasonText }
         : (action === 'cancel_appointment' || action === 'confirm_appointment')
@@ -3539,6 +3579,7 @@ async function processTurn({
           : action === 'check_slots'
             ? {
                 ...params,
+                ...(rebookMedicId ? { medicId: rebookMedicId } : {}),  // reschedule: keep same doctor
                 _lastOfferedDate: lastOfferedDate,
                 _slotSearchDirection: params.searchDirection || inferSlotSearchDirection(userText),
                 _explicitDateTo: explicitBeforeDateTo(userText, lastOfferedDate),
@@ -3546,7 +3587,9 @@ async function processTurn({
                 _bookingReasonText: updatedBookingReasonText,
                 _pendingSlots: pendingSlots,   // for doctor rotation on rejection
                 _offeredSlots: offeredSlots,   // never re-offer any slot shown earlier this call
-                _patientNamedDoctor: patientNamedDoctor(userText, cachedDoctors),
+                // A locked rebook doctor counts as "named" → suppress the unlock /
+                // rotation that would otherwise surface other doctors on re-search.
+                _patientNamedDoctor: namedDocThisTurn || !!rebookMedicId,
               }
             : params;
       const actionResult = await executeAction(action, enrichedParams, patient, callerNumber, history, nextLanguageState);
@@ -3583,7 +3626,9 @@ async function processTurn({
             lastOfferedDate: actionResult.lastOfferedDate ?? lastOfferedDate,
             bookingReasonText: updatedBookingReasonText,
             patient:         actionResult.patient,
-            rebookContext:   formatted.rebookContext,  // same-doctor rebook after cancel
+            // Keep the same-doctor lock alive across the rebook; drop it once the
+            // booking lands or the patient explicitly asked for a different doctor.
+            rebookContext:   (bookingSucceeded || wantsOtherDoctor) ? null : formatted.rebookContext,
           });
         }
       }
