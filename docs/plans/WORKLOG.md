@@ -2,6 +2,41 @@
 
 > **Purpose:** running record of what we're doing, decisions made, and findings — so any new chat or agent can read this + [ROADMAP.md](ROADMAP.md) and instantly know the current state. Newest entries at the top.
 
+## 2026-06-29 — MANDATORY call-end policy: never hang up until caller is done
+
+Audit of live calls found the worst failure mode: **#81** — patient chose a slot, said
+"obrigada", and Vicki hung up **without firing book_appointment** (silent no-show; patient
+thinks they're booked, nothing in NewSoft). Root cause: the global goodbye fired `hangup`
+on a soft "obrigada" and returned BEFORE the booking guard could complete the booking.
+
+User rule (mandatory, [[never-hangup-until-done]]): Vicki must NOT end the call until the
+caller EXPLICITLY says they're done, or we transfer — never on a bare "thanks", never mid-task.
+
+Deterministic call-end policy (aiLogic.js):
+- `detectGoodbye()` → 'hard' | 'soft' | null.
+- End ONLY on: HARD farewell (adeus/tchau/bye), OR (no task pending + Vicki already asked
+  "mais alguma coisa?" + explicit decline incl. a soft "obrigada" in that context).
+- Soft "obrigada" + slot pending → falls through to the booking guard → completes booking (#81 fix).
+- Soft "obrigada" mid-call (no task, not yet asked) → "de nada, posso ajudar em mais alguma
+  coisa?", keep call open. Router goodbye no longer ends on bare "obrigada"/"thanks".
+- Silence (90s) + max-duration watchdogs stay as the dead-line safety net.
+
+Verified by TRANSCRIPTS (gym judge scores this poorly — rubric mismatch on info-multi-question,
+so the transcript is the proof): on "obrigada" Vicki keeps the call open, answers the next
+question, ends only on explicit "é tudo/adeus". Full regression gate GREEN (safety 3/3;
+cancel/reschedule/booking all pass — normal closes still end). Deployed `cd963b1`, ● Online.
+
+Also found today (audit, NOT yet fixed — separate bugs):
+- #92 booked OK (Carlos Abelão, restoration, Dr. Hermes, verified) but book_appointment fired
+  twice (first attempt before name → failed, then succeeded; no duplicate — confirmed in NewSoft).
+- #93: reading back appointments surfaces "Atend." (front-desk) entries as if they were the
+  doctor consultation → patient (Maria da Graça, id 2599) rightly confused ("not Dr. Margarida").
+  Need to filter/deprioritise "Atend." entries and lead with the real doctor appt.
+- Implant patient (Maria dos Santos, #82) booked the free assessment with Dra. Silvia (general,
+  does NOT do implants) — specialty context lost on the "avaliação gratuita" reframe. Flagged to
+  reception (Hermes/Carla do implants; no June-30 slot, nearest Hermes July 2).
+- Vicki can't answer "qual é a morada?" mid-booking — loops on the slot offer instead.
+
 ## 2026-06-24 (latest) — Change-doctor on reschedule + the gym-NOISE lesson
 
 After the same-doctor fix, the change-doctor reschedule looked broken (resched_medico
