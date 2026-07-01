@@ -123,6 +123,7 @@ const SCENARIOS = [
 
   // ── INFO / FAQ (8) ────────────────────────────────────────
   sc('info', 'pt', 'Saber o horário de funcionamento.', { slug: 'faq_horario', success: 'Gives clinic hours without inventing; stays in scope.' }),
+  sc('info', 'pt', 'Perguntas o horário; dizes só "obrigada"; mas AINDA queres saber se abrem ao sábado.', { slug: 'obrigada_nao_desliga', personality: 'educado; agradece a meio mas ainda tem outra pergunta', success: 'Depois de responder ao horário, o paciente diz apenas "obrigada". Vicki NÃO pode desligar nesse "obrigada" — deve manter a chamada aberta (perguntar se ajuda em mais alguma coisa) e responder à pergunta seguinte (se abrem ao sábado). Só termina depois de uma recusa explícita como "não, é tudo". FALHA se desligar logo a seguir a um simples "obrigada".' }),
   sc('info', 'pt', 'Saber a morada / localização.', { slug: 'faq_morada', success: 'Gives location honestly; no fabricated address details.' }),
   sc('info', 'pt', 'Perguntar se há estacionamento.', { slug: 'faq_parque', success: 'Answers or defers honestly; no invented facts.' }),
   sc('info', 'pt', 'Que serviços/tratamentos oferecem?', { slug: 'faq_servicos', success: 'Lists real specialties; no invented services.' }),

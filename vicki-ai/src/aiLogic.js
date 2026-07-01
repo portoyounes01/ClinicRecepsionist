@@ -1899,23 +1899,24 @@ function goodbyePhrase(languageState) {
 // Before this, goodbye was only checked when currentAgent === 'router', so a
 // caller saying "Adeus" after booking/cancelling (when they're in the booking
 // or appointments agent) was never recognised and got stuck in a reprompt loop.
+// Returns 'hard' (unambiguous farewell — adeus/tchau/bye), 'soft' (a bare closer
+// like "obrigada" — NOT enough on its own to end the call), or null.
 function detectGoodbye(userText) {
   const text = normalizeForIntent(userText);
-  if (!text || userText === '[continua]') return false;
+  if (!text || userText === '[continua]') return null;
 
-  // Unambiguous farewells — caller is clearly ending the call, fire anywhere.
+  // Unambiguous farewells — caller is clearly ending the call.
   const hardBye = /\b(adeus|tchau|ate logo|ate ja|ate amanha|ate breve|bye|goodbye|good bye)\b/.test(text);
-  // Soft closers — only a goodbye if the WHOLE utterance is just a closer
-  // ("obrigado", "não obrigado", "era só isso", "thanks"), with nothing else.
+  // Soft closers — the WHOLE utterance is just "obrigado"/"era só isso"/"thanks".
   const softBye = /^(nao,?\s+|ok,?\s+|sim,?\s+|pronto,?\s+)?(muito\s+)?(obrigad[ao]|era so isso|era so|so isso|mais nada|foi tudo|nothing else|that'?s all|thanks|thank you)[\s.,!]*$/.test(text);
-  if (!hardBye && !softBye) return false;
+  if (!hardBye && !softBye) return null;
 
-  // Never hang up if the same turn also contains an actionable request
+  // Never treat as a goodbye if the same turn also contains an actionable request
   // (e.g. "obrigado, mas queria marcar uma limpeza").
   const hasRequest = /\b(marcar|agendar|remarcar|desmarcar|cancelar|consulta|vaga|vagas|disponibilidade|horario|quero|queria|gostaria|preciso|book|schedule|appointment|cancel|reschedule)\b/.test(text);
-  if (hasRequest) return false;
+  if (hasRequest) return null;
 
-  return true;
+  return hardBye ? 'hard' : 'soft';
 }
 
 // True when Vicki's LAST spoken line asked "anything else?" — used so a bare
@@ -2299,7 +2300,10 @@ function deterministicRouterDecision(userText, languageState) {
   const text = normalizeForIntent(userText);
   if (!text) return null;
 
-  if (/^(adeus|ate logo|ate ja|obrigad[ao]|era so isso|mais nada|foi tudo|bye|goodbye|thanks|thank you|that's all|nothing else)\b/.test(text)) {
+  // Only a HARD farewell (or explicit "nao obrigado / era so isso") ends the call.
+  // A bare "obrigada"/"thanks" is NOT enough — the call-end policy keeps the call
+  // open and asks "mais alguma coisa?" instead. [[never-hangup-until-done]]
+  if (/^(adeus|tchau|ate logo|ate ja|nao obrigad[ao]|era so isso|mais nada|foi tudo|bye|goodbye|that's all|nothing else)\b/.test(text)) {
     return {
       intent: 'goodbye',
       action: 'hangup',
@@ -2542,23 +2546,33 @@ async function processTurn({
     }
   };
 
-  // GLOBAL goodbye — runs for every agent so "Adeus" after a booking/cancel ends
-  // the call with a farewell instead of looping the "não percebi" reprompt.
-  if (detectGoodbye(userText)) {
+  // ── CALL-END POLICY (MANDATORY) ────────────────────────────────────────────
+  // Vicki must NOT end the call until the caller EXPLICITLY signals they're done,
+  // or we transfer. Never on a bare "thanks", never while a task is pending (a
+  // chosen-but-unbooked slot dropped the booking on call #81). Two ways to end:
+  //   1. HARD farewell ("adeus/tchau/bye") — the caller is clearly leaving.
+  //   2. Task done + Vicki already asked "mais alguma coisa?" + caller declines
+  //      (an explicit "não/nada/era tudo…" OR a soft "obrigada" in that context).
+  const byeKind = detectGoodbye(userText);
+  const askedAnythingElse = lastBotAskedAnythingElse(history);
+  const taskPending = pendingSlots?.length > 0;
+  if (byeKind === 'hard' ||
+      (!taskPending && askedAnythingElse && (isCloseDecline(userText) || byeKind === 'soft'))) {
     const speak = goodbyePhrase(nextLanguageState);
     const parsed = { speak, action: 'hangup', intent: 'goodbye', params: {} };
     history.push({ role: 'assistant', content: JSON.stringify(parsed) });
     return finalize({ speak, action: 'hangup', history, currentAgent, unclearTurns: 0, bookingReasonText });
   }
-
-  // END-OF-CALL: if Vicki just asked "mais alguma coisa?" and the caller declines
-  // (even a bare "não"), say a farewell and hang up. The !pendingSlots guard means
-  // a slot-rejection "não" during booking never ends the call.
-  if (!pendingSlots?.length && lastBotAskedAnythingElse(history) && isCloseDecline(userText)) {
-    const speak = goodbyePhrase(nextLanguageState);
-    const parsed = { speak, action: 'hangup', intent: 'goodbye', params: {} };
-    history.push({ role: 'assistant', content: JSON.stringify(parsed) });
-    return finalize({ speak, action: 'hangup', history, currentAgent, unclearTurns: 0, bookingReasonText });
+  // A bare "obrigada" mid-call (no task pending, Vicki hasn't asked "mais alguma
+  // coisa?" yet) is NOT a goodbye — acknowledge warmly and KEEP the call open so
+  // the caller can raise anything else. A soft "obrigada" with a task still pending
+  // falls through to the booking guard, which completes the booking (call #81 fix).
+  if (byeKind === 'soft' && !taskPending) {
+    const speak = nextLanguageState === 'en'
+      ? "You're welcome. Is there anything else I can help you with?"
+      : 'De nada. Posso ajudar em mais alguma coisa?';
+    history.push({ role: 'assistant', content: JSON.stringify({ speak, action: 'none', intent: 'closing', params: {} }) });
+    return finalize({ speak, action: 'none', history, currentAgent, unclearTurns: 0, bookingReasonText });
   }
 
   // ── GLOBAL STUCK-LOOP ESCAPE (runs early, every agent, every path) ──────────
